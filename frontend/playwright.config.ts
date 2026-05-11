@@ -17,10 +17,19 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: {
-    command: "npm run dev",
-    url: "http://localhost:3100",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      command: "npm run dev",
+      url: "http://localhost:3100",
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+    {
+      command: "python -m uvicorn app.main:app --port 8100",
+      cwd: "../backend",
+      url: "http://localhost:8100/health",
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+  ],
 });
