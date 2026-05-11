@@ -60,16 +60,47 @@ class LLMRouter:
         )
 
     async def route_and_call(
-        self, prompt: str, max_tokens: int = 1024, **kwargs
+        self,
+        prompt: str,
+        system: str = "",
+        task_type: str = "general",
+        force_model: str | None = None,
     ) -> tuple[str, RoutingDecision]:
-        """Route to Groq, return (response_text, decision). Audited."""
-        text, latency = await self._call_groq(prompt, max_tokens)
+        """Route to Groq, return (response_text, decision). Audited.
+
+        Signature matches services.protocols.LLMRouterProtocol. The OSS
+        fallback ignores task_type + force_model; every call routes to
+        llama-3.3-70b-versatile.
+        """
+        full_prompt = f"{system}\n\n{prompt}" if system else prompt
+        text, latency = await self._call_groq(full_prompt, max_tokens=1024)
         decision = RoutingDecision(
             sensitivity_level=SensitivityLevel.PUBLIC,
             latency_ms=latency,
         )
         self.audit_chain.sign_and_append(decision.model_dump(mode="json"))
         return text, decision
+
+    def classify_sensitivity(self, text: str) -> tuple:
+        """Constant PUBLIC classification — OSS fallback.
+
+        Returns (level: str, score: float, pii_types: list[str]) to
+        match services.protocols.LLMRouterProtocol. The proprietary
+        engine runs the FADP-aware council classifier here.
+        """
+        return ("public", 0.0, [])
+
+    def get_provider_status(self) -> dict:
+        """Provider availability snapshot.
+
+        Returns the same shape as the proprietary router so callers do
+        not branch on engine flavour.
+        """
+        return {
+            "groq": bool(os.environ.get(_GROQ_KEY_ENV)),
+            "ollama": False,
+            "anthropic": False,
+        }
 
     async def _call_groq(self, prompt: str, max_tokens: int) -> tuple[str, float]:
         """Issue the Groq call, return (text, latency_ms)."""
