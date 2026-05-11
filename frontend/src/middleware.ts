@@ -1,31 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
-import { COOKIE_NAME, getDemoPassword, validateCookie } from "@/lib/auth";
+import { SESSION_COOKIE_NAME } from "@/lib/auth";
 
-function isAuthenticated(request: NextRequest): boolean {
-  if (!getDemoPassword()) return true;
+const PUBLIC_PATHS = new Set([
+  "/login",
+  "/signup",
+  "/api/auth/login",
+  "/api/auth/signup",
+  "/api/auth/logout",
+  "/health",
+]);
 
-  const cookie = request.cookies.get(COOKIE_NAME);
-  if (!cookie) return false;
+function isPublic(pathname: string): boolean {
+  if (PUBLIC_PATHS.has(pathname)) return true;
+  return (
+    pathname.startsWith("/_next/") ||
+    pathname.startsWith("/favicon")
+  );
+}
 
-  return validateCookie(cookie.value);
+function hasSession(request: NextRequest): boolean {
+  return Boolean(request.cookies.get(SESSION_COOKIE_NAME)?.value);
 }
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (
-    pathname === "/login" ||
-    pathname === "/api/auth/login" ||
-    pathname.startsWith("/_next/") ||
-    pathname.startsWith("/favicon") ||
-    pathname === "/health"
-  ) {
+  if (isPublic(pathname)) {
     return NextResponse.next();
   }
 
-  if (!isAuthenticated(request)) {
-    // API calls get a JSON 401 so fetch() receives a parseable error,
-    // not an HTML redirect that causes SyntaxError in the client.
+  if (!hasSession(request)) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json(
         { detail: "Authentication required" },

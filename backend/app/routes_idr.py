@@ -9,17 +9,19 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from app.auth import get_current_user  # noqa: E402
 from core.idr_store import IDRStore  # noqa: E402
 from core.intent_decision_record import (  # noqa: E402
     DecisionPoint,
     IntentDecisionRecord,
     SynthesisMethod,
 )
+from models.user import User  # noqa: E402
 
 _DATA_DIR = Path.home() / "nexus-poc" / "data"
 _store = IDRStore(_DATA_DIR)
@@ -47,6 +49,17 @@ class ReviewRequest(BaseModel):
     notes: str = Field(default="", max_length=4000)
 
 
+def _belongs_to(entry: dict, user_id: str) -> bool:
+    """True iff the IDR was written under ``user_id``'s session.
+
+    Legacy IDRs (pre-multi-tenancy) have no ``tenant_id`` and are
+    filtered out — they belonged to the shared single-tenant world and
+    should not surface to any new account.
+    """
+    meta = entry.get("metadata") or {}
+    return meta.get("tenant_id") == user_id
+
+
 def _enrich_with_effective_status(entry: dict) -> dict:
     """Overlay ``effective_status`` and the latest review onto the entry.
 
@@ -71,35 +84,54 @@ def _enrich_with_effective_status(entry: dict) -> dict:
 
 
 @idrs.get("/recent")
-async def list_recent_idrs(limit: int = 20) -> dict:
-    """Return the most recent IDRs in reverse chronological order."""
+async def list_recent_idrs(
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return the caller's most recent IDRs, reverse chronological."""
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be in [1, 500]")
-    entries = _store.list_recent(limit=limit)
-    enriched = [_enrich_with_effective_status(e) for e in entries]
+    # Pull a larger window than ``limit`` so that filtering doesn't
+    # under-fill the response when foreign-tenant entries are interleaved.
+    raw = _store.list_recent(limit=max(limit * 4, 200))
+    own = [e for e in raw if _belongs_to(e, current_user.id)][:limit]
+    enriched = [_enrich_with_effective_status(e) for e in own]
     return {"count": len(enriched), "entries": enriched}
 
 
 @idrs.get("/by-input-hash/{input_hash}")
-async def find_idrs_by_input(input_hash: str) -> dict:
-    """Return every IDR whose input_hash matches (for dedup + lookup)."""
-    entries = _store.find_by_input_hash(input_hash)
-    enriched = [_enrich_with_effective_status(e) for e in entries]
+async def find_idrs_by_input(
+    input_hash: str,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return every IDR whose input_hash matches AND belongs to the caller."""
+    raw = _store.find_by_input_hash(input_hash)
+    own = [e for e in raw if _belongs_to(e, current_user.id)]
+    enriched = [_enrich_with_effective_status(e) for e in own]
     return {"input_hash": input_hash, "count": len(enriched), "entries": enriched}
 
 
 @idrs.get("/sequence/{sequence}")
-async def get_idr_by_sequence(sequence: int) -> dict:
-    """Return the IDR at a specific chain sequence number."""
+async def get_idr_by_sequence(
+    sequence: int,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return the IDR at a specific chain sequence, only if it's the caller's."""
     entry = _store.get_by_sequence(sequence)
-    if entry is None:
+    if entry is None or not _belongs_to(entry, current_user.id):
+        # 404 (not 403) to avoid leaking that a foreign IDR exists.
         raise HTTPException(status_code=404, detail=f"IDR with sequence {sequence} not found")
     return _enrich_with_effective_status(entry)
 
 
 @idrs.get("/verify")
 async def verify_idr_chain() -> dict:
-    """Walk the IDR chain and report HMAC integrity."""
+    """Walk the IDR chain and report HMAC integrity.
+
+    The chain is shared substrate; the verify call surfaces chain
+    integrity across all tenants. Tenant-specific verify is a future
+    follow-up (per-tenant signing keys, W7).
+    """
     return _store.verify()
 
 

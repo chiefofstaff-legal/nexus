@@ -2,30 +2,27 @@
 
 import { useState, Suspense } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { AuthError, loginUser } from "@/lib/auth";
+import { useRouter } from "next/navigation";
+import { AuthError, signupUser } from "@/lib/auth";
 
-function LoginForm() {
+function SignupForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     try {
-      await loginUser(email, password);
-      const from = searchParams.get("from") || "/";
-      router.push(from);
+      await signupUser(email, password);
+      router.push("/");
       router.refresh();
     } catch (err) {
-      const msg = err instanceof AuthError ? err.message : "Authentication failed";
+      const msg = err instanceof AuthError ? err.message : "Signup failed";
       setError(msg);
-      setPassword("");
     } finally {
       setLoading(false);
     }
@@ -49,7 +46,7 @@ function LoginForm() {
         type="password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
-        placeholder="Password"
+        placeholder="Password (min 8 characters)"
         required
         minLength={8}
         className="w-full border border-[#d1d5db] px-4 py-3.5 text-base font-mono
@@ -66,26 +63,26 @@ function LoginForm() {
 
       <button
         type="submit"
-        disabled={loading || !email || !password}
+        disabled={loading || !email || password.length < 8}
         className="w-full border-l-2 border-l-[#ea580c] bg-[#1a1a1a] text-white
                    px-8 py-3.5 font-mono text-sm tracking-widest uppercase
                    hover:bg-[#9a3412] disabled:opacity-30
                    transition-colors duration-300"
       >
-        {loading ? "Signing in…" : "Sign in"}
+        {loading ? "Creating account…" : "Create account"}
       </button>
 
       <p className="font-mono text-xs tracking-wider text-[#4b5563] text-center pt-2">
-        Don&apos;t have an account?{" "}
-        <Link href="/signup" className="text-[#ea580c] hover:underline">
-          Create one
+        Already have an account?{" "}
+        <Link href="/login" className="text-[#ea580c] hover:underline">
+          Sign in
         </Link>
       </p>
     </form>
   );
 }
 
-export default function LoginPage() {
+export default function SignupPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#EAEAEA]">
       <div className="w-full max-w-md p-8">
@@ -99,14 +96,14 @@ export default function LoginPage() {
         </div>
 
         <h1 className="text-4xl font-bold tracking-tighter text-[#1a1a1a] mb-2">
-          Sign in
+          Create account
         </h1>
         <p className="font-mono text-sm tracking-wider text-[#4b5563] mb-8">
-          Your matters, only yours.
+          Your matters stay isolated to your account.
         </p>
 
         <Suspense fallback={<div className="font-mono text-sm text-[#6b7280]">Loading…</div>}>
-          <LoginForm />
+          <SignupForm />
         </Suspense>
       </div>
     </div>

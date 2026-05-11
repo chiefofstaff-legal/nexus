@@ -340,8 +340,16 @@ Document text (first 3000 chars):
         self,
         original_path: Path,
         classification: ClassificationResult,
+        user_id: str,
     ) -> FilingResult:
-        """Generate auto-filed path based on classification."""
+        """Generate auto-filed path scoped to ``user_id``.
+
+        Layout: ``data/filed/<user_id>/<client>/<type>/<filename>``. The
+        user_id prefix is what enforces tenant filesystem isolation —
+        every other user's tree is reachable only by their own session.
+        """
+        if not user_id:
+            raise ValueError("user_id is required for tenant-scoped filing")
         # Naming: {date}_{type}_{parties}_{hash}.{ext}
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
         type_str = classification.document_type.value
@@ -353,9 +361,9 @@ Document text (first 3000 chars):
 
         new_filename = f"{date_str}_{type_str}_{parties_str}_{content_hash}{ext}"
 
-        # Folder: /{client}/{type}/
+        # Folder: /<user_id>/<client>/<type>/
         client = classification.parties[0].replace(" ", "-")[:30] if classification.parties else "unclassified"
-        folder = self.filed_dir / client / type_str
+        folder = self.filed_dir / user_id / client / type_str
         folder.mkdir(parents=True, exist_ok=True)
 
         new_path = folder / new_filename
@@ -368,7 +376,12 @@ Document text (first 3000 chars):
             confidence=classification.confidence,
         )
 
-    async def process(self, file_path: Path, extraction: Optional["ExtractionResult"] = None) -> DocumentRecord:
+    async def process(
+        self,
+        file_path: Path,
+        user_id: str,
+        extraction: Optional["ExtractionResult"] = None,
+    ) -> DocumentRecord:
         """Full pipeline: extract -> classify -> file -> return record.
 
         Writes up to two IDRs if an ``idr_store`` was injected:
@@ -382,10 +395,12 @@ Document text (first 3000 chars):
           summary. This satisfies H-MVP-3's "every decision writes an
           IDR" predicate for the ingestion surface.
         """
+        if not user_id:
+            raise ValueError("user_id is required for tenant-scoped processing")
         if extraction is None:
             extraction = await self.extract_text(file_path)
         classification = await self.classify(extraction.text, file_path.name)
-        filing = self.generate_filing_path(file_path, classification)
+        filing = self.generate_filing_path(file_path, classification, user_id=user_id)
 
         doc_id = hashlib.sha256(
             f"{file_path.name}:{datetime.utcnow().isoformat()}".encode()

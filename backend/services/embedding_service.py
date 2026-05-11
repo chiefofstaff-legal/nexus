@@ -70,9 +70,17 @@ class EmbeddingService:
         self,
         doc_id: str,
         text: str,
+        user_id: str,
         metadata: Optional[dict] = None,
     ) -> int:
-        """Chunk and index a document. Returns number of chunks indexed."""
+        """Chunk and index a document for ``user_id``.
+
+        The ``user_id`` is stamped into every chunk's metadata so the
+        ChromaDB ``where`` filter on retrieval can prove tenant
+        isolation. Returns number of chunks indexed.
+        """
+        if not user_id:
+            raise ValueError("user_id is required for tenant-scoped indexing")
         chunks = self.chunk_text(text)
         if not chunks:
             return 0
@@ -84,11 +92,12 @@ class EmbeddingService:
         base_meta = metadata or {}
 
         for i, chunk in enumerate(chunks):
-            chunk_id = f"{doc_id}_chunk_{i}"
+            chunk_id = f"{user_id}_{doc_id}_chunk_{i}"
             ids.append(chunk_id)
             documents.append(chunk)
             metadatas.append({
                 **base_meta,
+                "user_id": user_id,
                 "doc_id": doc_id,
                 "chunk_index": i,
                 "total_chunks": len(chunks),
@@ -105,17 +114,22 @@ class EmbeddingService:
     def search(
         self,
         query: str,
+        user_id: str,
         n_results: int = 5,
         doc_id: Optional[str] = None,
     ) -> list[dict]:
-        """Semantic search across indexed documents."""
+        """Semantic search restricted to ``user_id``'s chunks."""
+        if not user_id:
+            raise ValueError("user_id is required for tenant-scoped search")
         count = self.collection.count()
         if count == 0:
             return []
 
         # ChromaDB raises if n_results > collection size
         safe_n = min(n_results, count)
-        where = {"doc_id": doc_id} if doc_id else None
+        where: dict = {"user_id": user_id}
+        if doc_id:
+            where = {"$and": [{"user_id": user_id}, {"doc_id": doc_id}]}
 
         results = self.collection.query(
             query_texts=[query],
@@ -147,9 +161,17 @@ class EmbeddingService:
 
 # --- Search IDR logging (moved from app/routes.py, W1 SRP fix) ---------------
 
-def log_search_idr(query: str, results: list[dict], n_results: int, idr_store) -> None:
-    """Append a SEMANTIC_SEARCH IDR for one retrieval. Swallows errors
-    so search never fails on audit-chain issues.
+def log_search_idr(
+    query: str,
+    results: list[dict],
+    n_results: int,
+    idr_store,
+    user_id: str,
+) -> None:
+    """Append a SEMANTIC_SEARCH IDR for one retrieval, stamped with the
+    caller's ``user_id`` in ``metadata.tenant_id`` so /api/idrs/* can
+    filter by tenant. Swallows errors so search never fails on
+    audit-chain issues.
     """
     try:
         from core.intent_decision_record import (
@@ -181,6 +203,7 @@ def log_search_idr(query: str, results: list[dict], n_results: int, idr_store) -
                 "irrelevant chunk was surfaced (precision failure)."
             ),
             metadata={
+                "tenant_id": user_id,
                 "query": query,
                 "n_results": n_results,
                 "hit_doc_ids": [r.get("metadata", {}).get("doc_id") for r in results],

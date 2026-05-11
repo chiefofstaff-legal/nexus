@@ -62,36 +62,54 @@ class _ConnHolder:
 
 
 class _MatterDocuments(_ConnHolder):
-    """Document-membership operations split out for ISP hygiene."""
+    """Document-membership operations split out for ISP hygiene.
 
-    def add(self, matter_id: str, document_id: str) -> MatterDocument:
-        membership = MatterDocument(matter_id=matter_id, document_id=document_id)
+    Every method takes ``user_id`` and enforces tenant scope at the
+    SQL layer — cross-tenant membership writes/reads aren't reachable.
+    """
+
+    def add(self, matter_id: str, document_id: str, user_id: str) -> Optional[MatterDocument]:
+        if not user_id:
+            raise ValueError("user_id is required")
+        # Owner check: the matter must belong to user_id before we can
+        # attach a document to it.
         with self._conn() as conn:
+            owner = conn.execute(
+                "SELECT 1 FROM matters WHERE id = ? AND user_id = ?",
+                (matter_id, user_id),
+            ).fetchone()
+            if owner is None:
+                return None
+            membership = MatterDocument(matter_id=matter_id, document_id=document_id)
             conn.execute(
                 "INSERT OR REPLACE INTO matter_documents"
-                " (matter_id, document_id, added_at) VALUES (?, ?, ?)",
+                " (matter_id, document_id, added_at, user_id) VALUES (?, ?, ?, ?)",
                 (
                     membership.matter_id, membership.document_id,
-                    membership.added_at.isoformat(),
+                    membership.added_at.isoformat(), user_id,
                 ),
             )
         return membership
 
-    def remove(self, matter_id: str, document_id: str) -> bool:
+    def remove(self, matter_id: str, document_id: str, user_id: str) -> bool:
+        if not user_id:
+            raise ValueError("user_id is required")
         with self._conn() as conn:
             cur = conn.execute(
                 "DELETE FROM matter_documents"
-                " WHERE matter_id = ? AND document_id = ?",
-                (matter_id, document_id),
+                " WHERE matter_id = ? AND document_id = ? AND user_id = ?",
+                (matter_id, document_id, user_id),
             )
             return cur.rowcount > 0
 
-    def list(self, matter_id: str) -> list[MatterDocument]:
+    def list(self, matter_id: str, user_id: str) -> list[MatterDocument]:
+        if not user_id:
+            raise ValueError("user_id is required")
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT * FROM matter_documents"
-                " WHERE matter_id = ? ORDER BY added_at DESC",
-                (matter_id,),
+                " WHERE matter_id = ? AND user_id = ? ORDER BY added_at DESC",
+                (matter_id, user_id),
             ).fetchall()
         return [_row_to_membership(r) for r in rows]
 
@@ -112,60 +130,71 @@ class MatterStore(_ConnHolder):
         super().__init__(db_path)
         self.documents = _MatterDocuments(db_path)
 
-    def create(self, name: str, client: str = "", notes: str = "") -> Matter:
+    def create(self, name: str, user_id: str, client: str = "", notes: str = "") -> Matter:
+        if not user_id:
+            raise ValueError("user_id is required")
         matter = Matter(
             name=name.strip(), client=client.strip(), notes=notes.strip(),
         )
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO matters (id, name, client, notes, created_at, archived_at)"
-                " VALUES (?, ?, ?, ?, ?, NULL)",
+                "INSERT INTO matters (id, name, client, notes, created_at, archived_at, user_id)"
+                " VALUES (?, ?, ?, ?, ?, NULL, ?)",
                 (
                     matter.id, matter.name, matter.client, matter.notes,
-                    matter.created_at.isoformat(),
+                    matter.created_at.isoformat(), user_id,
                 ),
             )
         return matter
 
-    def get(self, matter_id: str) -> Optional[Matter]:
+    def get(self, matter_id: str, user_id: str) -> Optional[Matter]:
+        if not user_id:
+            raise ValueError("user_id is required")
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM matters WHERE id = ?", (matter_id,),
+                "SELECT * FROM matters WHERE id = ? AND user_id = ?",
+                (matter_id, user_id),
             ).fetchone()
         return _row_to_matter(row) if row else None
 
-    def list(self, include_archived: bool = False) -> list[Matter]:
-        sql = "SELECT * FROM matters"
+    def list(self, user_id: str, include_archived: bool = False) -> list[Matter]:
+        if not user_id:
+            raise ValueError("user_id is required")
+        sql = "SELECT * FROM matters WHERE user_id = ?"
         if not include_archived:
-            sql += " WHERE archived_at IS NULL"
+            sql += " AND archived_at IS NULL"
         sql += " ORDER BY created_at DESC"
         with self._conn() as conn:
-            rows = conn.execute(sql).fetchall()
+            rows = conn.execute(sql, (user_id,)).fetchall()
         return [_row_to_matter(r) for r in rows]
 
-    def update(self, matter_id: str, **fields) -> Optional[Matter]:
+    def update(self, matter_id: str, user_id: str, **fields) -> Optional[Matter]:
+        if not user_id:
+            raise ValueError("user_id is required")
         clean = {
             k: v for k, v in fields.items()
             if k in _ALLOWED_UPDATE_FIELDS and v is not None
         }
         if not clean:
-            return self.get(matter_id)
+            return self.get(matter_id, user_id)
         assignments = ", ".join(f"{k} = ?" for k in clean)
-        values = list(clean.values()) + [matter_id]
+        values = list(clean.values()) + [matter_id, user_id]
         with self._conn() as conn:
             cur = conn.execute(
-                f"UPDATE matters SET {assignments} WHERE id = ?", values,
+                f"UPDATE matters SET {assignments} WHERE id = ? AND user_id = ?", values,
             )
             if cur.rowcount == 0:
                 return None
-        return self.get(matter_id)
+        return self.get(matter_id, user_id)
 
-    def archive(self, matter_id: str) -> Optional[Matter]:
+    def archive(self, matter_id: str, user_id: str) -> Optional[Matter]:
+        if not user_id:
+            raise ValueError("user_id is required")
         ts = datetime.now(timezone.utc).isoformat()
         with self._conn() as conn:
             conn.execute(
                 "UPDATE matters SET archived_at = ?"
-                " WHERE id = ? AND archived_at IS NULL",
-                (ts, matter_id),
+                " WHERE id = ? AND user_id = ? AND archived_at IS NULL",
+                (ts, matter_id, user_id),
             )
-        return self.get(matter_id)
+        return self.get(matter_id, user_id)

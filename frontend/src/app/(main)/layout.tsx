@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { usePathname } from "next/navigation";
+import { UserProvider } from "@/components/UserContext";
 
 // -- Nav definitions ----------------------------------------------------------
 // Order reflects operator workflow: capture first, search/review after,
@@ -88,24 +89,26 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
-    <div className="flex min-h-full bg-[#f8f8f8]">
-      <SidebarDrawer
-        pathname={pathname}
-        mobileOpen={mobileOpen}
-        onClose={() => setMobileOpen(false)}
-      />
+    <UserProvider>
+      <div className="flex min-h-full bg-[#f8f8f8]">
+        <SidebarDrawer
+          pathname={pathname}
+          mobileOpen={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+        />
 
-      <div className="flex-1 flex flex-col min-w-0">
-        <TopBar onMenu={() => setMobileOpen(true)} pathname={pathname} />
-        <main
-          className="flex-1 max-w-7xl mx-auto w-full px-6 py-10 md:py-12"
-          role="main"
-        >
-          {children}
-        </main>
-        <Footer />
+        <div className="flex-1 flex flex-col min-w-0">
+          <TopBar onMenu={() => setMobileOpen(true)} pathname={pathname} />
+          <main
+            className="flex-1 max-w-7xl mx-auto w-full px-6 py-10 md:py-12"
+            role="main"
+          >
+            {children}
+          </main>
+          <Footer />
+        </div>
       </div>
-    </div>
+    </UserProvider>
   );
 }
 

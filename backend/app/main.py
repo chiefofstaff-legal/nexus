@@ -39,6 +39,8 @@ from app.routes import (  # noqa: E402
     time_capture,
     voice_router,
 )
+from app.auth_middleware import AuthRequiredMiddleware  # noqa: E402
+from app.routes_auth import router as auth_router  # noqa: E402
 from app.routes_calendar import calendar_router  # noqa: E402
 from app.routes_drafting import drafting  # noqa: E402
 from app.routes_email import email_router  # noqa: E402
@@ -46,14 +48,30 @@ from app.routes_export import export_router  # noqa: E402
 from app.routes_idr import idrs  # noqa: E402
 from app.routes_search import search_router  # noqa: E402
 from app.routes_summary import summary_router  # noqa: E402
+from services.user_store import UserStore  # noqa: E402
 
 TELEMETRY_LOG = Path(__file__).parent.parent.parent / "data" / "telemetry.jsonl"
 TELEMETRY_LOG.parent.mkdir(parents=True, exist_ok=True)
 _CORPUS_DIR = Path(__file__).parent.parent.parent / "test_corpus"
+_DATA_DIR = Path(__file__).parent.parent.parent / "data"
+
+
+_CORPUS_SYSTEM_USER_ID = "system-corpus"
 
 
 def _seed_corpus_if_empty() -> None:
-    """Index test_corpus/ into ChromaDB on fresh deployments so search works immediately."""
+    """Index ``test_corpus/`` into ChromaDB under the system pseudo-user.
+
+    Stamping the seeded chunks with ``user_id="system-corpus"`` means no
+    real user ever surfaces them in search (the search filter is
+    ``user_id == current_user.id``). Set ``NEXUS_SKIP_CORPUS_SEED=true``
+    to skip this step entirely on production deployments.
+    """
+    import os  # noqa: PLC0415
+
+    if os.environ.get("NEXUS_SKIP_CORPUS_SEED", "").lower() == "true":
+        return
+
     from app.routes import embedding_service  # noqa: PLC0415
 
     if embedding_service.get_stats()["total_chunks"] > 0:
@@ -72,7 +90,13 @@ def _seed_corpus_if_empty() -> None:
             embedding_service.index_document(
                 doc_id=f"corpus_{path.stem}",
                 text=text,
-                metadata={"filename": path.name, "document_type": "other", "source": "corpus"},
+                user_id=_CORPUS_SYSTEM_USER_ID,
+                metadata={
+                    "filename": path.name,
+                    "document_type": "other",
+                    "source": "corpus",
+                    "user_id": _CORPUS_SYSTEM_USER_ID,
+                },
             )
             logger.info("Indexed corpus file: %s", path.name)
         except Exception as exc:  # noqa: BLE001
@@ -81,6 +105,8 @@ def _seed_corpus_if_empty() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _app.state.data_dir = _DATA_DIR
+    _app.state.user_store = UserStore(_DATA_DIR)
     _seed_corpus_if_empty()
     yield
 
@@ -153,6 +179,7 @@ app = FastAPI(
 
 app.add_middleware(TimingMiddleware)
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(AuthRequiredMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -174,7 +201,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount route groups
+# Mount route groups — auth must come first so it can be whitelisted by
+# the auth-required middleware that W2 will add.
+app.include_router(auth_router)
 app.include_router(documents)
 app.include_router(routing)
 app.include_router(entities)

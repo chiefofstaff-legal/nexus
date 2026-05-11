@@ -32,10 +32,12 @@ _SCHEMA_DDL: tuple[str, ...] = (
         client TEXT NOT NULL DEFAULT '',
         notes TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
-        archived_at TEXT
+        archived_at TEXT,
+        user_id TEXT NOT NULL DEFAULT ''
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_matters_archived ON matters(archived_at)",
+    "CREATE INDEX IF NOT EXISTS idx_matters_user_id ON matters(user_id)",
     """
     CREATE TABLE IF NOT EXISTS time_entries (
         id TEXT PRIMARY KEY,
@@ -110,6 +112,29 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     return conn
 
 
+_USER_ID_BACKFILL_TABLES = ("matters", "time_entries", "tasks", "matter_documents")
+
+
+def _backfill_user_id_columns(conn: sqlite3.Connection) -> None:
+    """Add ``user_id`` to legacy tables created before multi-tenancy.
+
+    ``CREATE TABLE IF NOT EXISTS`` doesn't add columns to existing tables.
+    For every table that pre-dates the schema bump, we ALTER it to gain
+    a ``user_id`` column (default ``''`` so legacy rows remain readable
+    by the migration window — they're filtered out by the tenant guard
+    once the column exists).
+    """
+    for table in _USER_ID_BACKFILL_TABLES:
+        try:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN user_id TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            # Column already exists (schema ran fresh, or this is the
+            # 2nd init call). Either way, nothing to do.
+            pass
+
+
 def init_schema(db_path: Optional[Path] = None, force: bool = False) -> None:
     """Idempotently create all tables. First call performs the work; later
     calls (without ``force``) are a no-op so the import path stays cheap.
@@ -122,6 +147,7 @@ def init_schema(db_path: Optional[Path] = None, force: bool = False) -> None:
     with get_connection(db_path) as conn:
         for stmt in _SCHEMA_DDL:
             conn.execute(stmt)
+        _backfill_user_id_columns(conn)
     if db_path is None:
         _schema_initialised = True
 

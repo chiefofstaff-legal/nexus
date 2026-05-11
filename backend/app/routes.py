@@ -25,6 +25,7 @@ from pydantic import BaseModel
 # Add backend root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from app.auth import get_current_user
 from core.audit_chain import AuditChain
 from core.intent_decision_record import (
     DecisionPoint,
@@ -55,6 +56,7 @@ from services.task_manager import (
     delegate_from_transcript,
 )
 from models.matter import Matter
+from models.user import User
 from services.matter_service import MatterStore
 from services.sharepoint_service import (
     SharePointConfig,
@@ -187,6 +189,7 @@ async def upload_document(
     dp: DocumentProcessor = Depends(get_doc_processor),
     emb: EmbeddingService = Depends(get_embedding_service),
     ee: EntityExtractor = Depends(get_entity_extractor),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload and process a document through the full pipeline."""
     suffix = Path(file.filename or "document").suffix.lower()
@@ -195,14 +198,16 @@ async def upload_document(
     tmp_path = await _stream_to_temp(file, suffix)
     try:
         extraction = await dp.extract_text(tmp_path)
-        record = await dp.process(tmp_path, extraction=extraction)
+        record = await dp.process(tmp_path, user_id=current_user.id, extraction=extraction)
 
         chunk_count = emb.index_document(
             doc_id=record.id,
             text=extraction.text,
+            user_id=current_user.id,
             metadata={
                 "filename": file.filename or "",
                 "document_type": record.document_type.value,
+                "user_id": current_user.id,
             },
         )
         record.chunk_count = chunk_count
@@ -219,8 +224,8 @@ async def upload_document(
 
 
 @documents.post("/batch-upload")
-async def batch_upload():
-    """Process all documents in the test corpus directory."""
+async def batch_upload(current_user: User = Depends(get_current_user)):
+    """Process all documents in the test corpus directory, scoped to the caller."""
     results = []
     corpus_dir = CORPUS_DIR
     if not corpus_dir.exists():
@@ -230,14 +235,16 @@ async def batch_upload():
         if file_path.suffix in DocumentProcessor.SUPPORTED_EXTENSIONS:
             try:
                 extraction = await doc_processor.extract_text(file_path)
-                record = await doc_processor.process(file_path, extraction=extraction)
+                record = await doc_processor.process(file_path, user_id=current_user.id, extraction=extraction)
 
                 chunk_count = embedding_service.index_document(
                     doc_id=record.id,
                     text=extraction.text,
+                    user_id=current_user.id,
                     metadata={
                         "filename": file_path.name,
                         "document_type": record.document_type.value,
+                        "user_id": current_user.id,
                     },
                 )
                 record.chunk_count = chunk_count
@@ -258,6 +265,7 @@ async def _process_single_file(
     file_path: Path,
     source_folder: str,
     semaphore: asyncio.Semaphore,
+    user_id: str,
 ) -> dict:
     """Process a single file through the full pipeline under semaphore control.
 
@@ -275,7 +283,7 @@ async def _process_single_file(
     async with semaphore:
         try:
             extraction = await doc_processor.extract_text(file_path)
-            record = await doc_processor.process(file_path, extraction=extraction)
+            record = await doc_processor.process(file_path, user_id=user_id, extraction=extraction)
         except Exception as e:
             log.error(
                 "extract/process failed for %s: %s\n%s",
@@ -285,7 +293,7 @@ async def _process_single_file(
                 f"extract/process({file_path.name}): {type(e).__name__}: {e}"
             ) from e
 
-        record.chunk_count = await _safe_index(record, extraction, file_path, log)
+        record.chunk_count = await _safe_index(record, extraction, file_path, log, user_id=user_id)
         async with _ingest_lock:
             await _safe_extract_graph(extraction, record, file_path, log)
             _document_records[record.id] = record
@@ -297,7 +305,7 @@ async def _process_single_file(
         return record.model_dump(mode="json")
 
 
-async def _safe_index(record, extraction, file_path: Path, log) -> int:
+async def _safe_index(record, extraction, file_path: Path, log, user_id: str) -> int:
     """ChromaDB rejects empty docs — skip indexing gracefully."""
     if not extraction.text.strip():
         return 0
@@ -308,9 +316,11 @@ async def _safe_index(record, extraction, file_path: Path, log) -> int:
             lambda: embedding_service.index_document(
                 doc_id=record.id,
                 text=extraction.text,
+                user_id=user_id,
                 metadata={
                     "filename": file_path.name,
                     "document_type": record.document_type.value,
+                    "user_id": user_id,
                 },
             ),
         )
@@ -331,8 +341,8 @@ async def _safe_extract_graph(extraction, record, file_path: Path, log) -> None:
 
 
 @documents.post("/ingest-folder")
-async def ingest_folder(body: dict):
-    """Ingest all documents from a folder — streams SSE progress events."""
+async def ingest_folder(body: dict, current_user: User = Depends(get_current_user)):
+    """Ingest all documents from a folder for the caller — streams SSE progress events."""
     folder_path = body.get("folder_path", "")
     if not folder_path:
         raise HTTPException(status_code=400, detail="folder_path required")
@@ -361,7 +371,7 @@ async def ingest_folder(body: dict):
 
         async def process_one(fp: Path) -> tuple[str, dict]:
             try:
-                result = await _process_single_file(fp, str(target), sem)
+                result = await _process_single_file(fp, str(target), sem, user_id=current_user.id)
                 return ("ok", {**result, "_filename": fp.name})
             except Exception as e:
                 return ("error", {"_filename": fp.name, "error": str(e)})
@@ -497,8 +507,11 @@ async def download_redacted(doc_id: str):
 
 
 @documents.post("/search")
-async def search_documents(body: dict):
-    """Semantic search across all indexed documents.
+async def search_documents(
+    body: dict,
+    current_user: User = Depends(get_current_user),
+):
+    """Semantic search across the caller's documents only.
 
     Writes a SEMANTIC_SEARCH IDR per query via log_search_idr so the
     audit chain records what a user looked for, when, and which
@@ -509,8 +522,13 @@ async def search_documents(body: dict):
     doc_id = body.get("doc_id")
     if not query:
         raise HTTPException(status_code=400, detail="query field required")
-    results = embedding_service.search(query, n_results=n_results, doc_id=doc_id)
-    log_search_idr(query, results, n_results, idr_store)
+    results = embedding_service.search(
+        query,
+        user_id=current_user.id,
+        n_results=n_results,
+        doc_id=doc_id,
+    )
+    log_search_idr(query, results, n_results, idr_store, user_id=current_user.id)
     return {"query": query, "results": results, "total": len(results)}
 
 
@@ -1074,42 +1092,62 @@ class MatterDocumentRequest(BaseModel):
     document_id: str
 
 
-def _matter_or_404(matter_id: str) -> Matter:
-    """Fetch a matter or raise a 404 — DRY shortcut for the route handlers."""
-    matter = _matter_store.get(matter_id)
+def _matter_or_404(matter_id: str, user_id: str) -> Matter:
+    """Fetch a matter that belongs to ``user_id``, else 404.
+
+    404 (not 403) is intentional — we never confirm or deny existence
+    of resources owned by other tenants.
+    """
+    matter = _matter_store.get(matter_id, user_id)
     if matter is None:
         raise HTTPException(status_code=404, detail="matter not found")
     return matter
 
 
 @matters.post("", status_code=201)
-async def create_matter(body: MatterCreateRequest):
-    """Create a new legal matter. Returns the persisted record."""
+async def create_matter(
+    body: MatterCreateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Create a new legal matter owned by the caller."""
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="name required")
-    matter = _matter_store.create(name=name, client=body.client, notes=body.notes)
+    matter = _matter_store.create(
+        name=name, user_id=current_user.id, client=body.client, notes=body.notes,
+    )
     return matter.model_dump(mode="json")
 
 
 @matters.get("")
-async def list_matters(archived: bool = False):
-    """List matters; pass ``archived=true`` to include soft-deleted entries."""
-    rows = _matter_store.list(include_archived=archived)
+async def list_matters(
+    archived: bool = False,
+    current_user: User = Depends(get_current_user),
+):
+    """List the caller's matters; pass ``archived=true`` to include soft-deleted entries."""
+    rows = _matter_store.list(user_id=current_user.id, include_archived=archived)
     return {"matters": [m.model_dump(mode="json") for m in rows]}
 
 
 @matters.get("/{matter_id}")
-async def get_matter(matter_id: str):
-    """Fetch a single matter by id (404 if not found)."""
-    return _matter_or_404(matter_id).model_dump(mode="json")
+async def get_matter(
+    matter_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Fetch a single matter the caller owns (404 if not found)."""
+    return _matter_or_404(matter_id, current_user.id).model_dump(mode="json")
 
 
 @matters.patch("/{matter_id}")
-async def update_matter(matter_id: str, body: MatterUpdateRequest):
-    """Partial update — only non-None fields are applied."""
+async def update_matter(
+    matter_id: str,
+    body: MatterUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Partial update on a matter the caller owns."""
     updated = _matter_store.update(
-        matter_id, name=body.name, client=body.client, notes=body.notes,
+        matter_id, user_id=current_user.id,
+        name=body.name, client=body.client, notes=body.notes,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="matter not found")
@@ -1117,37 +1155,53 @@ async def update_matter(matter_id: str, body: MatterUpdateRequest):
 
 
 @matters.delete("/{matter_id}")
-async def archive_matter(matter_id: str):
-    """Soft-delete: sets ``archived_at`` so historic billing remains intact."""
-    _matter_or_404(matter_id)
-    archived = _matter_store.archive(matter_id)
+async def archive_matter(
+    matter_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Soft-delete the caller's matter; sets ``archived_at`` so billing stays intact."""
+    _matter_or_404(matter_id, current_user.id)
+    archived = _matter_store.archive(matter_id, user_id=current_user.id)
     if archived is None:  # defensive — race between get and archive
         raise HTTPException(status_code=404, detail="matter not found")
     return archived.model_dump(mode="json")
 
 
 @matters.post("/{matter_id}/documents", status_code=201)
-async def add_matter_document(matter_id: str, body: MatterDocumentRequest):
-    """Link a document to the matter (membership table)."""
-    _matter_or_404(matter_id)
-    membership = _matter_store.documents.add(matter_id, body.document_id)
+async def add_matter_document(
+    matter_id: str,
+    body: MatterDocumentRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Link a document to a matter the caller owns."""
+    _matter_or_404(matter_id, current_user.id)
+    membership = _matter_store.documents.add(matter_id, body.document_id, user_id=current_user.id)
+    if membership is None:
+        raise HTTPException(status_code=404, detail="matter not found")
     return membership.model_dump(mode="json")
 
 
 @matters.delete("/{matter_id}/documents/{document_id}", status_code=204)
-async def remove_matter_document(matter_id: str, document_id: str):
-    """Unlink a document from the matter. 204 on success."""
-    removed = _matter_store.documents.remove(matter_id, document_id)
+async def remove_matter_document(
+    matter_id: str,
+    document_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Unlink a document from a matter the caller owns."""
+    removed = _matter_store.documents.remove(matter_id, document_id, user_id=current_user.id)
     if not removed:
         raise HTTPException(status_code=404, detail="membership not found")
     return None
 
 
 @matters.get("/{matter_id}/documents")
-async def list_matter_documents(matter_id: str):
-    """List all documents linked to a matter."""
-    _matter_or_404(matter_id)
-    rows = _matter_store.documents.list(matter_id)
+async def list_matter_documents(
+    matter_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """List all documents linked to a matter the caller owns."""
+    _matter_or_404(matter_id, current_user.id)
+    rows = _matter_store.documents.list(matter_id, user_id=current_user.id)
     return {"documents": [d.model_dump(mode="json") for d in rows]}
 
 
