@@ -35,8 +35,8 @@ function useVoiceTranscript() {
         try {
           const blob = new Blob(chunksRef.current, { type: "audio/webm" });
           const form = new FormData();
-          form.append("file", blob, "recording.webm");
-          const res = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: form });
+          form.append("audio", blob, "recording.webm");
+          const res = await fetch(`${API_BASE}/api/voice/transcribe`, { method: "POST", body: form });
           if (!res.ok) throw new Error(`Transcription failed: ${res.status}`);
           const data = await res.json();
           setTranscript(data.transcript ?? "");
