@@ -1,0 +1,24 @@
+# NEXUS Assignee Roster
+# ----------------------
+# Externalised so a new tenant (e.g. Leandro) can be onboarded by editing
+# this file alone — no backend code change. Each entry maps a canonical
+# first name to a list of phonetic / transcription aliases that voice STT
+# tends to produce. Scan order matches list order, so put the canonical
+# spelling first.
+#
+# Schema: assignees -> list of {canonical: str, aliases: list[str]}.
+# Aliases are matched case-insensitively against the alias map.
+#
+# When onboarding a new firm, replace this file with their roster.
+
+assignees:
+  - canonical: "Andre"
+    aliases: [andray, andré, andrew, andrei]
+  - canonical: "Arnold"
+    aliases: [arnot, arnould]
+  - canonical: "Fabio"
+    aliases: [fabio, fabia]
+  - canonical: "Mia"
+    aliases: [mia, maya, mya]
+  - canonical: "Laurie"
+    aliases: [laurie, lori, lowry, lourens]

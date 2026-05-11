@@ -1,0 +1,61 @@
+NON-DISCLOSURE AGREEMENT
+
+This Non-Disclosure Agreement ("Agreement") is entered into as of 15 January 2026 by and between:
+
+DISCLOSING PARTY: Meridian Technologies Ltd, a company incorporated under the laws of South Africa, with its registered office at 42 Innovation Drive, Sandton, Johannesburg ("Meridian")
+
+RECEIVING PARTY: Blackstone Legal Partners LLP, a limited liability partnership organised under the laws of England and Wales, with offices at 15 King's Bench Walk, London EC4Y 7JE ("Blackstone")
+
+(each a "Party" and collectively the "Parties")
+
+RECITALS
+
+WHEREAS, Meridian possesses certain confidential and proprietary information relating to its artificial intelligence platform and associated intellectual property;
+
+WHEREAS, Blackstone wishes to evaluate such information for the purpose of providing legal advisory services in connection with a potential Series B fundraising round;
+
+NOW, THEREFORE, in consideration of the mutual covenants and agreements set forth herein, the Parties agree as follows:
+
+1. DEFINITION OF CONFIDENTIAL INFORMATION
+
+"Confidential Information" means all information, whether written, oral, electronic, or visual, disclosed by Meridian to Blackstone, including but not limited to:
+(a) Technical data, trade secrets, know-how, and inventions;
+(b) Business plans, financial projections, and investor materials;
+(c) Customer lists, pricing strategies, and market research;
+(d) Source code, algorithms, and system architecture documents;
+(e) The terms and existence of this Agreement.
+
+2. OBLIGATIONS OF RECEIVING PARTY
+
+Blackstone shall:
+(a) Hold all Confidential Information in strict confidence;
+(b) Not disclose Confidential Information to any third party without prior written consent;
+(c) Use Confidential Information solely for the Purpose;
+(d) Restrict access to Confidential Information to those employees and partners who have a need to know;
+(e) Apply the same degree of care as it applies to its own confidential information, but in no event less than reasonable care.
+
+3. TERM AND TERMINATION
+
+This Agreement shall remain in effect for a period of three (3) years from the date of execution. The confidentiality obligations shall survive termination for an additional period of two (2) years.
+
+4. GOVERNING LAW AND JURISDICTION
+
+This Agreement shall be governed by and construed in accordance with the laws of England and Wales. Any disputes shall be subject to the exclusive jurisdiction of the courts of London.
+
+5. REMEDIES
+
+The Parties acknowledge that a breach of this Agreement may cause irreparable harm for which monetary damages would be an inadequate remedy. Accordingly, the non-breaching Party shall be entitled to seek injunctive relief.
+
+IN WITNESS WHEREOF, the Parties have executed this Agreement as of the date first written above.
+
+For and on behalf of MERIDIAN TECHNOLOGIES LTD:
+
+Name: Dr. Sarah Chen
+Title: Chief Executive Officer
+Date: 15 January 2026
+
+For and on behalf of BLACKSTONE LEGAL PARTNERS LLP:
+
+Name: James Hartley QC
+Title: Senior Partner
+Date: 15 January 2026

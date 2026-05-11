@@ -1,0 +1,5 @@
+channels:
+  - type: log  # always active — writes to data/notifications.jsonl
+# Uncomment to activate Slack:
+# - type: slack
+#   webhook_url: ${SLACK_WEBHOOK_URL}

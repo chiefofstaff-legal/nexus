@@ -1,0 +1,60 @@
+INVOICE
+
+THOMPSON & ASSOCIATES
+Attorneys at Law
+27 Fox Street, Marshalltown, Johannesburg, 2001
+VAT Registration: 4520123456
+
+INVOICE NO: INV-2026-0089
+DATE: 28 February 2026
+DUE DATE: 30 March 2026
+
+BILL TO:
+Platinum Ventures (Pty) Ltd
+Attention: Ms Priya Naidoo, Financial Controller
+45 Sandton Drive, Suite 1200
+Sandton, 2196
+
+RE: Professional Services — Case No. 2026/12345
+    Platinum Ventures v Global Mining Consortium
+
+DESCRIPTION OF SERVICES                          HOURS    RATE      AMOUNT
+----------------------------------------------------------------------
+Preparation of Heads of Argument                  24.0   R3,500    R84,000.00
+Conference with Senior Counsel (Adv. Dlamini)      6.0   R5,000    R30,000.00
+Review of mining right documentation               8.0   R3,500    R28,000.00
+Correspondence with opposing attorneys             4.5   R3,500    R15,750.00
+Court filing and registrar liaison                 2.0   R2,500     R5,000.00
+Research: MPRDA case law and precedents           12.0   R3,000    R36,000.00
+Witness statement preparation (Dr. S. Chen)        6.0   R3,500    R21,000.00
+----------------------------------------------------------------------
+SUBTOTAL                                          62.5              R219,750.00
+
+DISBURSEMENTS
+Court filing fees                                                    R2,500.00
+Courier and delivery                                                   R850.00
+Printing and copying (2,400 pages)                                   R3,600.00
+----------------------------------------------------------------------
+DISBURSEMENTS TOTAL                                                  R6,950.00
+
+----------------------------------------------------------------------
+SUBTOTAL BEFORE VAT                                                R226,700.00
+VAT (15%)                                                           R34,005.00
+----------------------------------------------------------------------
+TOTAL DUE                                                          R260,705.00
+----------------------------------------------------------------------
+
+BANKING DETAILS:
+Bank: First National Bank
+Account: Thompson & Associates Trust Account
+Account No: 62845791023
+Branch Code: 250655
+Reference: INV-2026-0089
+
+PAYMENT TERMS: 30 days from date of invoice.
+Interest at prime + 2% will be charged on overdue accounts.
+
+Thank you for your continued trust in our services.
+
+T. Thompson
+Managing Partner

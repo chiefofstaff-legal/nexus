@@ -1,0 +1,80 @@
+PROFESSIONAL SERVICES AGREEMENT
+
+Agreement No: PSA-2026-0042
+Date: 1 March 2026
+
+BETWEEN:
+
+CLIENT: African Gold Refinery (Pty) Ltd
+Registration No: 2019/123456/07
+Address: 88 Marshall Street, Johannesburg, 2001
+("the Client")
+
+AND:
+
+SERVICE PROVIDER: CodeTonight (Pty) Ltd
+Registration No: 2021/654321/07
+Address: 12 Tech Park Avenue, Cape Town, 8001
+("the Service Provider")
+
+1. SCOPE OF SERVICES
+
+1.1 The Service Provider shall deliver the following:
+    (a) Design and development of a document automation platform
+    (b) Integration with existing client management systems
+    (c) Training and knowledge transfer to Client staff
+    (d) Ongoing maintenance and support for twelve (12) months
+
+1.2 Detailed specifications are set out in Annexure A.
+
+2. FEES AND PAYMENT
+
+2.1 Total project fee: R100,000.00 (One Hundred Thousand Rand)
+2.2 Payment schedule:
+    - 30% upon signing: R30,000.00
+    - 40% upon delivery of Phase 1: R40,000.00
+    - 30% upon final acceptance: R30,000.00
+2.3 Payment terms: 30 days from date of invoice
+2.4 Late payment shall attract interest at the prime rate plus 2%
+
+3. INTELLECTUAL PROPERTY
+
+3.1 All intellectual property created during this engagement shall vest in the Client upon full payment.
+3.2 The Service Provider retains the right to use general methodologies and non-proprietary tools.
+3.3 Pre-existing intellectual property of either Party remains with that Party.
+
+4. CONFIDENTIALITY
+
+4.1 Each Party shall maintain the confidentiality of information received from the other Party.
+4.2 This obligation shall survive termination of this Agreement for a period of five (5) years.
+
+5. TERM AND TERMINATION
+
+5.1 This Agreement commences on the date of signing and continues until completion of all deliverables.
+5.2 Either Party may terminate with 30 days' written notice.
+5.3 In the event of material breach, the non-breaching Party may terminate immediately upon written notice.
+
+6. LIABILITY
+
+6.1 The Service Provider's total liability shall not exceed the total fees paid under this Agreement.
+6.2 Neither Party shall be liable for indirect or consequential damages.
+
+7. GOVERNING LAW
+
+This Agreement is governed by the laws of the Republic of South Africa. Disputes shall be resolved through arbitration in Johannesburg.
+
+SIGNED at Johannesburg on this 1st day of March 2026.
+
+For AFRICAN GOLD REFINERY (PTY) LTD:
+Name: Francois van der Merwe
+Title: Managing Director
+Signature: _______________
+
+For CODETONIGHT (PTY) LTD:
+Name: Laurie Scheepers
+Title: Technical Director
+Signature: _______________
+
+WITNESSES:
+1. Name: Michael Toop
+2. Name: Arnold Kinabo

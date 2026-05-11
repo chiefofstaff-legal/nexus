@@ -1,0 +1,36 @@
+# NEXUS POC Backend Dependencies
+# FastAPI + ASGI
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+
+# Document Processing
+pymupdf>=1.25.0
+pymupdf4llm>=0.0.17
+
+# Embeddings + Vector DB
+sentence-transformers>=3.3.0
+chromadb>=0.5.0
+
+# LLM Routing (direct SDKs only — see feedback_no_litellm.md)
+groq>=1.1.0
+
+# NLP / Entity Extraction
+spacy>=3.8.0
+
+# Data Validation
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# Claude API (for document classification + entity extraction)
+anthropic>=0.42.0
+
+# SOP Engine
+pyyaml>=6.0
+
+# HTTP client (SharePoint Graph API, async)
+httpx>=0.28.0
+
+# Utilities
+aiofiles>=24.1.0
+python-dotenv>=1.0.1

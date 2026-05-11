@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Environment
+.env*
+!.env.example
+
+# Data (contains signing keys and audit logs)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Test corpus (may contain sample legal docs)
+test_corpus/*.pdf
+test_corpus/*.docx

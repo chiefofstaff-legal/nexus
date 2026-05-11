@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+/*
+  ChiefOfStaff.pro Design System — Swiss Nihilism, Light Mode
+  WCAG AA verified against paper-grey (4.5:1 normal, 3:1 large)
+
+  The palette is intentionally severe: paper, ink, steel, orange.
+  Every surface colour is a token so a future dark variant or
+  high-contrast variant can be swapped via [data-theme="..."] without
+  touching components.
+
+  Token        Default    Use
+  ────────────────────────────────────────────────────────────
+  --nx-paper   #EAEAEA    page background
+  --nx-surface #FFFFFF    card / panel background
+  --nx-ink     #1a1a1a    headings, primary text  (14.5:1)
+  --nx-ink-2   #374151    body text               (8.6:1)
+  --nx-ink-3   #4b5563    secondary, labels       (6.3:1)
+  --nx-ink-4   #9ca3af    tertiary, meta
+  --nx-rule    #d1d5db    borders, hairlines
+  --nx-rule-2  #e5e7eb    subtle internal dividers
+  --nx-rule-3  #fafafa    recessed panel background
+  --nx-accent  #ea580c    orange decorative (large elements)
+  --nx-accent-ink #9a3412 orange text (accessible)
+  --nx-good    #16a34a    chain-valid, confirmed
+  --nx-bad     #dc2626    chain-broken, refuted
+*/
+
+:root {
+  --nx-paper: #EAEAEA;
+  --nx-surface: #FFFFFF;
+  --nx-ink: #1a1a1a;
+  --nx-ink-2: #374151;
+  --nx-ink-3: #4b5563;
+  --nx-ink-4: #9ca3af;
+  --nx-rule: #d1d5db;
+  --nx-rule-2: #e5e7eb;
+  --nx-rule-3: #fafafa;
+  --nx-accent: #ea580c;
+  --nx-accent-ink: #9a3412;
+  --nx-good: #16a34a;
+  --nx-bad: #dc2626;
+
+  /* Entity-type hues for the legal knowledge graph.
+     Shapes do the heavy lifting; hues add a second axis. */
+  --nx-entity-person: #1a1a1a;
+  --nx-entity-org: #374151;
+  --nx-entity-case: #ea580c;
+  --nx-entity-document: #9ca3af;
+  --nx-entity-event: #4b5563;
+  --nx-entity-location: #6b7280;
+}
+
+@theme inline {
+  --color-paper: var(--nx-paper);
+  --color-accent: var(--nx-accent);
+  --color-accent-text: var(--nx-accent-ink);
+}
+
+body {
+  background: var(--nx-paper);
+  color: var(--nx-ink-2);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 2px;
+}
+
+button, input, textarea, select {
+  border-radius: 0;
+}
+
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+    "Liberation Mono", Menlo, monospace;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

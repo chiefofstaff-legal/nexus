@@ -1,0 +1,58 @@
+# NEXUS POC — Docker Compose stack for reproducible deployment.
+# Reproduces the backend + frontend + ollama services on any Linux host.
+# See deploy/README.md for prerequisite env vars.
+
+services:
+  nexus-backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: nexus-backend:latest
+    container_name: nexus-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NEXUS_PERSISTENCE_DB=/data/persistence.sqlite
+      - NEXUS_INGESTION_COST_LOG=/data/ingestion-costs.jsonl
+    ports:
+      - "8000:8000"
+    volumes:
+      - nexus_data:/data
+    networks:
+      - nexus_internal
+
+  nexus-frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    image: nexus-frontend:latest
+    container_name: nexus-frontend
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=http://nexus-backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - nexus-backend
+    networks:
+      - nexus_internal
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nexus-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - nexus_internal
+
+networks:
+  nexus_internal:
+    driver: bridge
+
+volumes:
+  nexus_data:
+  ollama_data:
