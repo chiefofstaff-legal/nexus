@@ -55,7 +55,7 @@ async function wireStubs(page: Page, store: ReturnType<typeof newStore>) {
       const [, mid] = list;
       if (method === "GET") {
         const docs = store.documents.filter((d) => d.matter_id === mid);
-        return route.fulfill({ contentType: "application/json", body: JSON.stringify(docs) });
+        return route.fulfill({ contentType: "application/json", body: JSON.stringify({ documents: docs }) });
       }
       if (method === "POST") {
         const body = JSON.parse(route.request().postData() || "{}");
@@ -91,7 +91,7 @@ async function wireStubs(page: Page, store: ReturnType<typeof newStore>) {
         const items = Array.from(store.matters.values()).filter(
           (m) => archivedFilter === !!m.archived_at,
         );
-        return route.fulfill({ contentType: "application/json", body: JSON.stringify(items) });
+        return route.fulfill({ contentType: "application/json", body: JSON.stringify({ matters: items }) });
       }
       if (method === "POST") {
         const body = JSON.parse(route.request().postData() || "{}");
