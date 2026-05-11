@@ -29,9 +29,15 @@ class ClassificationResult(BaseModel):
 
 
 class SensitivityClassifier:
-    """OSS classifier — regex PII + constant scorer, no council."""
+    """OSS classifier — regex PII + constant scorer, no council.
 
-    def __init__(self, **kwargs):
+    Accepts a council positionally for source-compat with the proprietary
+    nexus_engine.classifier(council=...) signature, but the OSS fallback
+    does not use it (no multi-provider deliberation in this clone).
+    """
+
+    def __init__(self, council=None, **kwargs):
+        self._council = council  # accepted for compat; unused in OSS fallback
         self._pii = PiiDetector()
         self._scorer = SensitivityScorer()
 
