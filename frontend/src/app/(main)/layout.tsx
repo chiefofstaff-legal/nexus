@@ -235,8 +235,19 @@ function TopBar({
 function Footer() {
   return (
     <footer className="border-t border-[#d1d5db] bg-white" role="contentinfo">
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between font-mono text-[10px] tracking-widest uppercase text-[#6b7280]">
-        <span>chiefofstaff.pro x CodeTonight</span>
+      <div className="max-w-7xl mx-auto px-6 py-4 space-y-3 font-mono text-[10px] tracking-widest uppercase text-[#6b7280]">
+        <p
+          className="not-uppercase tracking-wider leading-relaxed normal-case"
+          style={{ textTransform: "none" }}
+        >
+          <span className="font-semibold text-[#1a1a1a]">Public demo.</span>{" "}
+          Inputs are processed by US-based frontier AI models (Anthropic,
+          Groq, OpenAI) via a Germany-hosted relay. Do not enter privileged
+          or confidential matter data.
+        </p>
+        <div className="flex items-center justify-between">
+          <span>chiefofstaff.pro</span>
+        </div>
       </div>
     </footer>
   );

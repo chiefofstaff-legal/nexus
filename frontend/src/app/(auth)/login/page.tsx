@@ -81,6 +81,12 @@ function LoginForm() {
           Create one
         </Link>
       </p>
+
+      <p className="font-mono text-[10px] leading-relaxed tracking-wider text-[#6b7280] pt-6 border-t border-[#d1d5db] mt-6">
+        Public demo. Inputs are processed by US-based frontier AI models
+        (Anthropic, Groq, OpenAI) via a Germany-hosted relay. Do not enter
+        privileged or confidential matter data.
+      </p>
     </form>
   );
 }
