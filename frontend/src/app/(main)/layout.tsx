@@ -237,13 +237,14 @@ function Footer() {
     <footer className="border-t border-[#d1d5db] bg-white" role="contentinfo">
       <div className="max-w-7xl mx-auto px-6 py-4 space-y-3 font-mono text-[10px] tracking-widest uppercase text-[#6b7280]">
         <p
-          className="not-uppercase tracking-wider leading-relaxed normal-case"
+          className="tracking-wider leading-relaxed"
           style={{ textTransform: "none" }}
         >
-          <span className="font-semibold text-[#1a1a1a]">Public demo.</span>{" "}
-          Inputs are processed by US-based frontier AI models (Anthropic,
-          Groq, OpenAI) via a Germany-hosted relay. Do not enter privileged
-          or confidential matter data.
+          <span className="font-semibold text-[#059669]">PII Shield active.</span>{" "}
+          Client names and matter references are anonymised to placeholders
+          before any AI call leaves the Germany-hosted server. As-is public
+          demo under AGPL-3.0; your firm remains responsible for compliance.
+          Shield source: <code>chiefofstaff-legal/nexus/backend/services/pii_shield.py</code>.
         </p>
         <div className="flex items-center justify-between">
           <span>chiefofstaff.pro</span>

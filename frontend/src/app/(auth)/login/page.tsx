@@ -82,10 +82,11 @@ function LoginForm() {
         </Link>
       </p>
 
-      <p className="font-mono text-[10px] leading-relaxed tracking-wider text-[#6b7280] pt-6 border-t border-[#d1d5db] mt-6">
-        Public demo. Inputs are processed by US-based frontier AI models
-        (Anthropic, Groq, OpenAI) via a Germany-hosted relay. Do not enter
-        privileged or confidential matter data.
+      <p className="font-mono text-[10px] leading-relaxed tracking-wider text-[#065f46] pt-6 border-t border-[#bbf7d0] mt-6">
+        <strong>PII Shield active.</strong> Client names, persons and matter
+        references are anonymised to placeholders before any AI call leaves
+        the Germany-hosted server. As-is public demo, AGPL-3.0, no warranty;
+        your firm remains responsible for compliance.
       </p>
     </form>
   );

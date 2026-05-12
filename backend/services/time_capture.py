@@ -30,6 +30,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, computed_field
 
 from core.persistence import get_connection, init_schema
+from services.pii_shield import PiiSession
 
 
 DEFAULT_HOURLY_RATE_CHF = 450.0
@@ -94,27 +95,46 @@ def _heuristic_duration(transcript: str) -> int:
 
 
 def _claude_parse(transcript: str, client) -> dict:
-    """Call Claude Haiku to structure a transcript. Raises ParseError on failure."""
+    """Call Claude Haiku to structure a transcript. Raises ParseError on failure.
+
+    PII Shield: client names, matter references, and person names are
+    replaced with stable placeholders BEFORE the transcript leaves this
+    process. Claude sees only placeholders. The de-anonymisation step
+    restores the original strings on return so the stored entry is
+    faithful to what the lawyer said. No real client data ever leaves
+    the German server in this path.
+    """
     if not client:
         raise ParseError("Anthropic client not configured")
+    shield = PiiSession()
+    anonymised, _mappings = shield.anonymize(transcript)
     try:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
             system=_PARSE_SYSTEM,
-            messages=[{"role": "user", "content": transcript}],
+            messages=[{"role": "user", "content": anonymised}],
         )
         raw = _strip_fences(response.content[0].text)
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except (json.JSONDecodeError, Exception) as e:
         raise ParseError(f"Claude parse failed: {e}") from e
+    # De-anonymise the string fields Claude can populate. Numeric fields
+    # carry no PII and pass through untouched.
+    if isinstance(parsed.get("matter"), str):
+        parsed["matter"] = shield.deanonymize(parsed["matter"])
+    if isinstance(parsed.get("description"), str):
+        parsed["description"] = shield.deanonymize(parsed["description"])
+    return parsed
 
 
 def transcribe_and_parse(transcript: str, anthropic_client=None) -> dict:
     """Parse a free-form transcript into a structured time-entry dict.
 
     Falls back to a heuristic duration parser if Claude is unavailable so
-    the feature remains usable offline for the POC demo.
+    the feature remains usable offline for the POC demo. The PII Shield
+    is applied inside ``_claude_parse`` — the heuristic fallback never
+    contacts a remote LLM so no shield is needed there.
     """
     transcript = (transcript or "").strip()
     if not transcript:
@@ -181,69 +201,100 @@ class TimeEntryStore:
         self._ensure_init()
         return get_connection(self._db_path)
 
-    def log_time_entry(self, entry: TimeEntry) -> TimeEntry:
-        """Persist an entry and return it (id is assigned by the model)."""
+    def log_time_entry(self, entry: TimeEntry, user_id: str = "") -> TimeEntry:
+        """Persist an entry owned by ``user_id`` and return it.
+
+        MT-FU W7: ``user_id`` partitions the table so multiple visitors
+        on the public demo never see each other's entries. Legacy callers
+        that pass no ``user_id`` get the empty-string bucket — that bucket
+        is intentionally NOT readable from any authenticated GET path
+        below, so legacy data is fenced off.
+        """
         with self._conn() as conn:
             conn.execute(
                 "INSERT INTO time_entries"
                 " (id, matter, matter_id, description, duration_minutes,"
-                "  hourly_rate_chf, created_at, raw_transcript, billable)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "  hourly_rate_chf, created_at, raw_transcript, billable,"
+                "  user_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     entry.id, entry.matter, entry.matter_id, entry.description,
                     entry.duration_minutes, entry.hourly_rate_chf,
                     entry.created_at.isoformat(), entry.raw_transcript,
                     1 if entry.billable else 0,
+                    user_id,
                 ),
             )
         return entry
 
-    def get_time_entries(self) -> list[TimeEntry]:
-        """Return entries reverse-chronologically (newest first)."""
+    def get_time_entries(self, user_id: str = "") -> list[TimeEntry]:
+        """Return entries owned by ``user_id``, newest first.
+
+        MT-FU W7 tenant filter. An empty ``user_id`` returns ONLY entries
+        with an empty user_id — never a global join. A fresh signup with
+        no entries yet sees an empty list, full stop.
+        """
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM time_entries ORDER BY created_at DESC",
+                "SELECT * FROM time_entries WHERE user_id = ?"
+                " ORDER BY created_at DESC",
+                (user_id,),
             ).fetchall()
         return [_row_to_time_entry(r) for r in rows]
 
-    def update_matter(self, entry_id: str, matter: str) -> Optional[TimeEntry]:
-        """Edit the matter field post-capture (lawyers often correct mishears)."""
+    def update_matter(
+        self, entry_id: str, matter: str, user_id: str = ""
+    ) -> Optional[TimeEntry]:
+        """Edit ``matter`` only if the caller owns the entry.
+
+        MT-FU W7: returns None if the entry is not owned by ``user_id``,
+        so an attacker who guesses an entry id from another tenant cannot
+        mutate it.
+        """
         with self._conn() as conn:
             cur = conn.execute(
-                "UPDATE time_entries SET matter = ? WHERE id = ?",
-                (matter.strip(), entry_id),
+                "UPDATE time_entries SET matter = ?"
+                " WHERE id = ? AND user_id = ?",
+                (matter.strip(), entry_id, user_id),
             )
             if cur.rowcount == 0:
                 return None
             row = conn.execute(
-                "SELECT * FROM time_entries WHERE id = ?", (entry_id,),
+                "SELECT * FROM time_entries WHERE id = ? AND user_id = ?",
+                (entry_id, user_id),
             ).fetchone()
         return _row_to_time_entry(row) if row else None
 
-    def update_transcript(self, entry_id: str, transcript: str) -> Optional[TimeEntry]:
-        """Correct the raw STT transcript post-capture (acronyms, mishears)."""
+    def update_transcript(
+        self, entry_id: str, transcript: str, user_id: str = ""
+    ) -> Optional[TimeEntry]:
+        """Edit the raw transcript only if the caller owns the entry."""
         with self._conn() as conn:
             cur = conn.execute(
-                "UPDATE time_entries SET raw_transcript = ? WHERE id = ?",
-                (transcript, entry_id),
+                "UPDATE time_entries SET raw_transcript = ?"
+                " WHERE id = ? AND user_id = ?",
+                (transcript, entry_id, user_id),
             )
             if cur.rowcount == 0:
                 return None
             row = conn.execute(
-                "SELECT * FROM time_entries WHERE id = ?", (entry_id,),
+                "SELECT * FROM time_entries WHERE id = ? AND user_id = ?",
+                (entry_id, user_id),
             ).fetchone()
         return _row_to_time_entry(row) if row else None
 
-    def get_daily_total_chf(self, rate: Optional[float] = None) -> dict:
-        """Sum today's entries at the supplied rate (UTC calendar day)."""
+    def get_daily_total_chf(
+        self, rate: Optional[float] = None, user_id: str = ""
+    ) -> dict:
+        """Sum today's entries owned by ``user_id`` at the supplied rate."""
         effective_rate = rate if rate is not None else self.default_rate_chf
         today_iso = datetime.now(timezone.utc).date().isoformat()
-        # Today is identified by the YYYY-MM-DD prefix on created_at.
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT duration_minutes FROM time_entries"
-                " WHERE billable = 1 AND substr(created_at, 1, 10) = ?",
-                (today_iso,),
+                " WHERE billable = 1 AND user_id = ?"
+                " AND substr(created_at, 1, 10) = ?",
+                (user_id, today_iso),
             ).fetchall()
         total_minutes = sum(int(r["duration_minutes"]) for r in rows)
         total_chf = round((total_minutes / 60.0) * effective_rate, 2)

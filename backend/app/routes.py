@@ -831,24 +831,57 @@ class TranscriptUpdate(BaseModel):
     transcript: str
 
 
-def _audit_time_entry(entry: TimeEntry, source: str) -> None:
-    """Record a billable time entry to the tamper-evident audit chain."""
+def _audit_ai_decision(
+    event: str, user_id: str, payload: dict
+) -> None:
+    """Tamper-evident IDR entry for every AI-driven decision.
+
+    Per V>>'s directive: every AI parse, draft, or summarise call writes
+    a signed audit-chain entry the firm can replay later. The payload is
+    redacted of free-form text (the PII Shield already anonymises before
+    the AI call, but we keep raw transcripts out of the chain on top of
+    that — only structural facts get signed).
+
+    Swallows errors: audit is secondary to returning the result, but a
+    failure here is logged at the call site rather than silently lost.
+    """
     try:
         audit_chain.sign_and_append({
-            "event": "time_entry_logged",
+            "event": event,
+            "user_id": user_id,
+            **payload,
+        })
+    except Exception:
+        pass
+
+
+def _audit_time_entry(entry: TimeEntry, user_id: str, source: str) -> None:
+    """Record a billable time entry to the tamper-evident audit chain."""
+    _audit_ai_decision(
+        "time_entry_logged",
+        user_id,
+        {
             "entry_id": entry.id,
             "matter": entry.matter,
             "duration_minutes": entry.duration_minutes,
             "hourly_rate_chf": entry.hourly_rate_chf,
             "value_chf": entry.value_chf,
             "source": source,
-        })
-    except Exception:
-        pass  # audit is secondary to returning the entry
+        },
+    )
 
 
-def _capture_and_store(transcript: str, rate: float, source: str) -> TimeEntry:
-    """Shared pipeline: parse transcript, build TimeEntry, store, audit."""
+def _capture_and_store(
+    transcript: str, rate: float, source: str, user: User
+) -> TimeEntry:
+    """Shared pipeline: parse transcript via PII-shielded LLM call,
+    build TimeEntry, store under ``user.id``, append signed IDR.
+
+    The transcript is anonymised inside ``build_entry_from_transcript``
+    (PII Shield in time_capture._claude_parse), so the AI provider never
+    sees real client names or matter references. The de-anonymised result
+    is stored AND audited locally.
+    """
     try:
         entry = build_entry_from_transcript(
             transcript,
@@ -857,56 +890,92 @@ def _capture_and_store(transcript: str, rate: float, source: str) -> TimeEntry:
         )
     except ParseError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    _time_store.log_time_entry(entry)
-    _audit_time_entry(entry, source)
+    _time_store.log_time_entry(entry, user_id=user.id)
+    _audit_time_entry(entry, user.id, source)
     return entry
 
 
 @time_capture.post("/capture")
-async def capture_time(req: TimeCaptureRequest):
+async def capture_time(
+    req: TimeCaptureRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Voice capture endpoint. Accepts a transcript from the browser Web
     Speech API (audio_b64 is accepted for future server-side transcription
     but ignored for now) and parses it via Claude Haiku."""
-    entry = _capture_and_store(req.transcript, req.hourly_rate_chf, "voice")
+    entry = _capture_and_store(
+        req.transcript, req.hourly_rate_chf, "voice", current_user,
+    )
     return entry.model_dump()
 
 
 @time_capture.post("/log")
-async def log_time(req: TimeLogRequest):
+async def log_time(
+    req: TimeLogRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Direct text log (no audio) — same parse pipeline, different source tag."""
-    entry = _capture_and_store(req.transcript, req.hourly_rate_chf, "text")
+    entry = _capture_and_store(
+        req.transcript, req.hourly_rate_chf, "text", current_user,
+    )
     return entry.model_dump()
 
 
 @time_capture.get("/entries")
-async def list_time_entries():
-    """List all time entries with derived CHF values, newest first."""
-    entries = _time_store.get_time_entries()
+async def list_time_entries(
+    current_user: User = Depends(get_current_user),
+):
+    """List the caller's own time entries with derived CHF values,
+    newest first. Other tenants' entries are never returned."""
+    entries = _time_store.get_time_entries(user_id=current_user.id)
     return {"entries": [e.model_dump(mode="json") for e in entries]}
 
 
 @time_capture.patch("/entries/{entry_id}/matter")
-async def update_entry_matter(entry_id: str, body: MatterUpdate):
-    """Edit the matter field after capture (Claude mishears client names)."""
-    updated = _time_store.update_matter(entry_id, body.matter)
+async def update_entry_matter(
+    entry_id: str,
+    body: MatterUpdate,
+    current_user: User = Depends(get_current_user),
+):
+    """Edit the matter field — only if the caller owns the entry."""
+    updated = _time_store.update_matter(entry_id, body.matter, user_id=current_user.id)
     if updated is None:
         raise HTTPException(status_code=404, detail="Time entry not found")
+    _audit_ai_decision(
+        "time_entry_matter_updated",
+        current_user.id,
+        {"entry_id": entry_id, "matter": updated.matter},
+    )
     return updated.model_dump(mode="json")
 
 
 @time_capture.patch("/entries/{entry_id}/transcript")
-async def update_entry_transcript(entry_id: str, body: TranscriptUpdate):
-    """Correct the raw Groq STT transcript — fixes acronyms and mishears."""
-    updated = _time_store.update_transcript(entry_id, body.transcript)
+async def update_entry_transcript(
+    entry_id: str,
+    body: TranscriptUpdate,
+    current_user: User = Depends(get_current_user),
+):
+    """Correct the raw Groq STT transcript — only if the caller owns the entry."""
+    updated = _time_store.update_transcript(
+        entry_id, body.transcript, user_id=current_user.id,
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Time entry not found")
+    _audit_ai_decision(
+        "time_entry_transcript_corrected",
+        current_user.id,
+        {"entry_id": entry_id},
+    )
     return updated.model_dump(mode="json")
 
 
 @time_capture.get("/summary")
-async def time_summary(rate: Optional[float] = None):
-    """Daily billable summary at the requested CHF hourly rate."""
-    return _time_store.get_daily_total_chf(rate=rate)
+async def time_summary(
+    rate: Optional[float] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """Daily billable summary scoped to the caller."""
+    return _time_store.get_daily_total_chf(rate=rate, user_id=current_user.id)
 
 
 # === TASK / DELEGATION ROUTES ===

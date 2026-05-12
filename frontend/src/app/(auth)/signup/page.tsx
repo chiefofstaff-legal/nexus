@@ -60,23 +60,33 @@ function SignupForm() {
                    transition-colors duration-300"
       />
 
-      <div className="border border-[#d1d5db] bg-white p-4 space-y-3">
-        <p className="font-mono text-[10px] tracking-widest uppercase text-[#4b5563]">
-          How your data is handled
+      <div className="border-l-2 border-[#059669] bg-[#f0fdf4] p-4 space-y-3">
+        <p className="font-mono text-[10px] tracking-widest uppercase text-[#065f46]">
+          PII Shield — your client data stays yours
         </p>
         <p className="font-mono text-xs leading-relaxed text-[#1a1a1a]">
-          This is a public demo. Text and voice you submit are routed through a
-          server in Germany (Hetzner, Falkenstein) to US-based frontier AI
-          models — Anthropic Claude, Groq, and OpenAI — for parsing,
-          summarisation, and drafting. Audio is transcribed by Groq Whisper
-          and is not retained by the demo.
+          Before any sentence you speak or type leaves the Germany-hosted
+          server, the open-source <strong>PII Shield</strong> replaces every
+          real client name, person, organisation, and matter reference with
+          a stable placeholder (e.g. <code>ORG_1</code>, <code>PERSON_2</code>,
+          <code>CASE_3</code>). The AI parser only ever sees the placeholders.
+          The original names are restored locally before the entry is shown
+          back to you and stored.
         </p>
         <p className="font-mono text-xs leading-relaxed text-[#1a1a1a]">
-          Do not enter privileged, confidential client matter, or any
-          information that cannot leave your jurisdiction. The self-hosted
-          path that runs entirely on the Germany server (open-source local
-          LLM) is on the roadmap but is <em>not</em> the default for this
-          public demo today.
+          This is the canonical primitive from the open-source DONNA repo —
+          you can read its 103 lines of stdlib Python and its 170-line test
+          suite at <code>chiefofstaff-legal/nexus/backend/services/pii_shield.py</code>.
+          AGPL-3.0. Self-hosters get the same protection.
+        </p>
+        <p className="font-mono text-[10px] leading-relaxed text-[#4b5563] pt-2 border-t border-[#bbf7d0]">
+          <strong>As-is public demo.</strong> The shield is best-effort
+          pattern-based redaction, not a guarantee. Use professional
+          judgement with privileged content. Provided as-is under AGPL-3.0
+          with no warranty of accuracy, availability, or fitness for legal
+          practice; your firm remains responsible for compliance,
+          confidentiality, and the safekeeping of client matter. By signing
+          up you accept these terms.
         </p>
         <label className="flex items-start gap-3 cursor-pointer pt-1">
           <input
@@ -84,13 +94,13 @@ function SignupForm() {
             checked={acceptedDisclosure}
             onChange={(e) => setAcceptedDisclosure(e.target.checked)}
             required
-            className="mt-1 w-4 h-4 accent-[#ea580c] cursor-pointer"
-            aria-label="I understand how my data will be processed"
+            className="mt-1 w-4 h-4 accent-[#059669] cursor-pointer"
+            aria-label="I understand the PII Shield protection model and accept the as-is demo terms"
           />
           <span className="font-mono text-xs leading-relaxed text-[#1a1a1a]">
-            I understand my inputs are sent to US-based AI models via a
-            Germany-hosted relay and will not enter confidential matter
-            information into this demo.
+            I understand the PII Shield anonymises client references before
+            any AI call, and I accept this as-is public demo (AGPL-3.0, no
+            warranty; my firm remains responsible for compliance).
           </span>
         </label>
       </div>
