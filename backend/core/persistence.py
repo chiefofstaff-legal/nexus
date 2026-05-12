@@ -24,7 +24,7 @@ from typing import Optional
 
 DEFAULT_DB_PATH = Path.home() / "nexus-poc" / "data" / "persistence.sqlite"
 
-_SCHEMA_DDL: tuple[str, ...] = (
+_TABLE_DDL: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS matters (
         id TEXT PRIMARY KEY,
@@ -36,8 +36,6 @@ _SCHEMA_DDL: tuple[str, ...] = (
         user_id TEXT NOT NULL DEFAULT ''
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_matters_archived ON matters(archived_at)",
-    "CREATE INDEX IF NOT EXISTS idx_matters_user_id ON matters(user_id)",
     """
     CREATE TABLE IF NOT EXISTS time_entries (
         id TEXT PRIMARY KEY,
@@ -52,8 +50,6 @@ _SCHEMA_DDL: tuple[str, ...] = (
         FOREIGN KEY (matter_id) REFERENCES matters(id) ON DELETE SET NULL
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_time_entries_created ON time_entries(created_at)",
-    "CREATE INDEX IF NOT EXISTS idx_time_entries_matter_id ON time_entries(matter_id)",
     """
     CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
@@ -70,9 +66,6 @@ _SCHEMA_DDL: tuple[str, ...] = (
         FOREIGN KEY (matter_id) REFERENCES matters(id) ON DELETE SET NULL
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)",
-    "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)",
-    "CREATE INDEX IF NOT EXISTS idx_tasks_matter_id ON tasks(matter_id)",
     """
     CREATE TABLE IF NOT EXISTS matter_documents (
         matter_id TEXT NOT NULL,
@@ -83,6 +76,23 @@ _SCHEMA_DDL: tuple[str, ...] = (
     )
     """,
 )
+
+# Indexes run AFTER _backfill_user_id_columns so legacy tables (created
+# before MT W5 added the user_id column) gain the column before any index
+# references it. Combining indexes into _TABLE_DDL with the tables crashes
+# legacy DBs at index creation time and surfaces as HTTP 500 on every
+# /api/time/* endpoint (and any other endpoint that lazily inits the schema).
+_INDEX_DDL: tuple[str, ...] = (
+    "CREATE INDEX IF NOT EXISTS idx_matters_archived ON matters(archived_at)",
+    "CREATE INDEX IF NOT EXISTS idx_matters_user_id ON matters(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_time_entries_created ON time_entries(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_time_entries_matter_id ON time_entries(matter_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_matter_id ON tasks(matter_id)",
+)
+
+_SCHEMA_DDL = _TABLE_DDL + _INDEX_DDL
 
 _schema_initialised = False
 
@@ -145,9 +155,17 @@ def init_schema(db_path: Optional[Path] = None, force: bool = False) -> None:
     if _schema_initialised and not force and db_path is None:
         return
     with get_connection(db_path) as conn:
-        for stmt in _SCHEMA_DDL:
+        # Phase 1: create tables (idempotent — CREATE TABLE IF NOT EXISTS).
+        for stmt in _TABLE_DDL:
             conn.execute(stmt)
+        # Phase 2: backfill user_id on tables that pre-date MT W5. Must
+        # happen BEFORE any index referencing user_id is created.
         _backfill_user_id_columns(conn)
+        # Phase 3: create indexes — now safe because every legacy table
+        # has the user_id column either from the table DDL (fresh DB) or
+        # from the backfill ALTER (legacy DB).
+        for stmt in _INDEX_DDL:
+            conn.execute(stmt)
     if db_path is None:
         _schema_initialised = True
 
