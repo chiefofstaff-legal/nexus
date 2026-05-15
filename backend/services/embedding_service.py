@@ -203,7 +203,8 @@ def log_search_idr(
                 "irrelevant chunk was surfaced (precision failure)."
             ),
             metadata={
-                "tenant_id": user_id,
+                # tenant_id is injected by IDRStore.append (single DRY
+                # injection point) — do not stamp it here too.
                 "query": query,
                 "n_results": n_results,
                 "hit_doc_ids": [r.get("metadata", {}).get("doc_id") for r in results],
@@ -211,6 +212,6 @@ def log_search_idr(
                 "relevances": [r.get("relevance", 0.0) for r in results],
             },
         )
-        idr_store.append(idr)
+        idr_store.append(idr, user_id=user_id)
     except Exception:
         pass

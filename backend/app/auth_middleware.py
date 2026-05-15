@@ -54,7 +54,8 @@ class AuthRequiredMiddleware(BaseHTTPMiddleware):
 
         token = request.cookies.get(SESSION_COOKIE) or ""
         data_dir = Path(request.app.state.data_dir)
-        if not verify_session(token, data_dir):
+        store = getattr(request.app.state, "user_store", None)
+        if not verify_session(token, data_dir, store=store):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Authentication required"},

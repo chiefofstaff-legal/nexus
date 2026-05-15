@@ -1,26 +1,33 @@
-"""
-Sensitivity scorer — OSS stub. The proprietary heuristic-weighted
-scorer lives in `nexus_engine.scorer`.
+"""Sensitivity scoring — converts PII density into a 0–1 score and level.
 
-This OSS fallback returns a constant 0.5 (medium) sensitivity score so
-downstream code that depends on the scorer does not crash. The actual
-sensitivity routing decisions are made by the proprietary
-nexus_engine.classifier in hosted deployments.
+Extracted from LLMRouter (W3 SRP fix). Single responsibility: given a PII
+occurrence count and text length, return the sensitivity level and score.
 """
-
 from __future__ import annotations
+
+from services.types import SensitivityLevel
 
 
 class SensitivityScorer:
-    """Constant-score scorer — OSS fallback."""
+    """Converts PII density into a 0–1 sensitivity score and routing level."""
 
-    def score(self, text: str, pii_types: list[str] | None = None) -> float:
-        """Return a sensitivity score in [0.0, 1.0].
+    THRESHOLD_INTERNAL: float = 0.3
+    THRESHOLD_CONFIDENTIAL: float = 0.7
 
-        OSS fallback: returns 0.5 when any PII is detected, 0.0 otherwise.
-        The proprietary scorer weighs PII type, document context, and
-        sensitivity rubric heuristics.
+    def score(self, pii_count: float, text_len: int) -> tuple[SensitivityLevel, float]:
+        """Return ``(level, score)`` where score is in [0.0, 1.0].
+
+        ``pii_count`` may be fractional (spaCy ORG/MONEY partial weights).
+        ``text_len`` must be > 0; callers pass ``len(text)`` directly.
         """
-        if pii_types:
-            return 0.5
-        return 0.0
+        density = pii_count / (max(text_len, 1) / 1000)
+        raw = min(density / 10.0, 1.0)
+
+        if raw >= self.THRESHOLD_CONFIDENTIAL:
+            level = SensitivityLevel.CONFIDENTIAL
+        elif raw >= self.THRESHOLD_INTERNAL:
+            level = SensitivityLevel.INTERNAL
+        else:
+            level = SensitivityLevel.PUBLIC
+
+        return level, round(raw, 3)

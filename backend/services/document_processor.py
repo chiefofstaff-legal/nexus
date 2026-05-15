@@ -406,7 +406,7 @@ Document text (first 3000 chars):
             f"{file_path.name}:{datetime.utcnow().isoformat()}".encode()
         ).hexdigest()[:16]
 
-        self._log_ingestion_idrs(file_path, extraction, classification)
+        self._log_ingestion_idrs(file_path, extraction, classification, user_id)
 
         return DocumentRecord(
             id=doc_id,
@@ -429,8 +429,14 @@ Document text (first 3000 chars):
         file_path: Path,
         extraction: ExtractionResult,
         classification: ClassificationResult,
+        user_id: str,
     ) -> None:
         """Emit vision_ocr_provider + document_classification IDRs.
+
+        ``user_id`` is the acting tenant (threaded from ``process``'s
+        ``user_id`` arg, which the upload/batch/folder routes pass from
+        ``current_user.id``). It is forwarded to ``IDRStore.append`` so
+        the ingestion IDRs are tenant-attributed and visible on /idr.
 
         Silently no-ops when no IDR store was injected (keeps tests
         and lightweight consumers decoupled from the audit chain).
@@ -470,7 +476,7 @@ Document text (first 3000 chars):
                     "filename": file_path.name,
                 },
             )
-            self.idr_store.append(vision_idr)
+            self.idr_store.append(vision_idr, user_id=user_id)
             doc_idr = IntentDecisionRecord(
                 decision_point=DecisionPoint.DOCUMENT_CLASSIFICATION,
                 input_hash=input_hash,
@@ -499,7 +505,7 @@ Document text (first 3000 chars):
                     "jurisdiction": classification.jurisdiction,
                 },
             )
-            self.idr_store.append(doc_idr)
+            self.idr_store.append(doc_idr, user_id=user_id)
         except Exception:
             # Audit chain is secondary to ingestion success; don't fail
             # the whole pipeline because a signing key was misconfigured.

@@ -10,7 +10,9 @@ HMAC-SHA256 over ``f"{user_id}:{issued_at}"`` keyed by the signing key.
 
 from __future__ import annotations
 
+import base64
 import hmac
+import json
 import os
 import secrets
 import time
@@ -24,6 +26,7 @@ from services.user_store import UserStore
 
 SESSION_COOKIE = "nexus-session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
+RESET_TOKEN_DEFAULT_TTL = 3600  # 1 hour
 
 _SIGNING_KEY: bytes | None = None
 
@@ -50,15 +53,42 @@ def _resolve_signing_key(data_dir: Path) -> bytes:
     return _SIGNING_KEY
 
 
-def sign_session(user_id: str, data_dir: Path, now: int | None = None) -> str:
+def _user_session_salt(user_id: str, store: UserStore | None) -> bytes:
+    """Per-user salt derived from current password hash.
+
+    Embedding this in the session signature means rotating the password
+    invalidates every existing cookie for that user without any global
+    revocation list. Falls back to empty bytes when store cannot resolve
+    the user (verify will then fail, which is the safe default).
+    """
+    if store is None:
+        return b""
+    user = store.get_by_id(user_id)
+    if user is None:
+        return b""
+    return user.password_hash.encode("utf-8")
+
+
+def sign_session(
+    user_id: str,
+    data_dir: Path,
+    now: int | None = None,
+    store: UserStore | None = None,
+) -> str:
     """Issue a signed session token for ``user_id``."""
     issued = int(now if now is not None else time.time())
     payload = f"{user_id}:{issued}".encode("utf-8")
-    sig = hmac.new(_resolve_signing_key(data_dir), payload, sha256).hexdigest()
+    keyed = _resolve_signing_key(data_dir) + _user_session_salt(user_id, store)
+    sig = hmac.new(keyed, payload, sha256).hexdigest()
     return f"{user_id}:{issued}:{sig}"
 
 
-def verify_session(token: str, data_dir: Path, now: int | None = None) -> str | None:
+def verify_session(
+    token: str,
+    data_dir: Path,
+    now: int | None = None,
+    store: UserStore | None = None,
+) -> str | None:
     """Return ``user_id`` if the token is intact and unexpired."""
     if not token or token.count(":") != 2:
         return None
@@ -68,13 +98,62 @@ def verify_session(token: str, data_dir: Path, now: int | None = None) -> str | 
     except ValueError:
         return None
     payload = f"{user_id}:{issued}".encode("utf-8")
-    expected = hmac.new(_resolve_signing_key(data_dir), payload, sha256).hexdigest()
+    keyed = _resolve_signing_key(data_dir) + _user_session_salt(user_id, store)
+    expected = hmac.new(keyed, payload, sha256).hexdigest()
     if not hmac.compare_digest(expected, sig):
         return None
     age = int(now if now is not None else time.time()) - issued
     if age < 0 or age > SESSION_TTL_SECONDS:
         return None
     return user_id
+
+
+def _b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(s: str) -> bytes:
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s + pad)
+
+
+def sign_reset_token(
+    email: str,
+    data_dir: Path,
+    ttl_seconds: int = RESET_TOKEN_DEFAULT_TTL,
+    now: int | None = None,
+) -> str:
+    """Sign a password-reset token: base64url(payload).base64url(hmac)."""
+    exp = int(now if now is not None else time.time()) + int(ttl_seconds)
+    payload = json.dumps({"email": email, "exp": exp}, separators=(",", ":")).encode("utf-8")
+    sig = hmac.new(_resolve_signing_key(data_dir), payload, sha256).digest()
+    return f"{_b64url(payload)}.{_b64url(sig)}"
+
+
+def verify_reset_token(token: str, data_dir: Path, now: int | None = None) -> str | None:
+    """Return the embedded email if the token is intact and unexpired."""
+    if not token or token.count(".") != 1:
+        return None
+    payload_b64, sig_b64 = token.split(".")
+    try:
+        payload = _b64url_decode(payload_b64)
+        provided_sig = _b64url_decode(sig_b64)
+    except (ValueError, TypeError):
+        return None
+    expected = hmac.new(_resolve_signing_key(data_dir), payload, sha256).digest()
+    if not hmac.compare_digest(expected, provided_sig):
+        return None
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    email = data.get("email")
+    exp = data.get("exp")
+    if not isinstance(email, str) or not isinstance(exp, int):
+        return None
+    if exp < int(now if now is not None else time.time()):
+        return None
+    return email
 
 
 def _cookie_secure() -> bool:
@@ -114,7 +193,7 @@ def get_current_user(
     data_dir: Path = Depends(get_data_dir),
 ) -> User:
     token = request.cookies.get(SESSION_COOKIE) or ""
-    user_id = verify_session(token, data_dir)
+    user_id = verify_session(token, data_dir, store=store)
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

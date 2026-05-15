@@ -250,7 +250,9 @@ export default function IDRPage() {
 
       {/* IDR log */}
       <div className="border border-[#d1d5db] bg-white">
-        <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-[#d1d5db] bg-[#fafafa] font-mono text-xs tracking-widest uppercase text-[#4b5563]">
+        {/* Column headers — only meaningful in the desktop table layout.
+            Hidden below md where each record stacks into a labelled card. */}
+        <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 border-b border-[#d1d5db] bg-[#fafafa] font-mono text-xs tracking-widest uppercase text-[#4b5563]">
           <div className="col-span-1">Seq</div>
           <div className="col-span-2">Timestamp</div>
           <div className="col-span-3">Decision Point</div>
@@ -263,6 +265,11 @@ export default function IDRPage() {
             Empty chain. Route a query at <a href="/routing" className="text-[#9a3412] underline">/routing</a> to write the first IDR.
           </div>
         )}
+        {entries.length === 0 && loading && (
+          <div className="px-6 py-12 text-center font-mono text-sm text-[#4b5563] tracking-widest uppercase">
+            Loading records…
+          </div>
+        )}
         {entries.map((entry) => {
           const id = entry.idr_id;
           const isOpen = expanded.has(id);
@@ -272,25 +279,32 @@ export default function IDRPage() {
               <button
                 type="button"
                 onClick={() => toggleExpand(id)}
-                className="w-full grid grid-cols-12 gap-4 px-6 py-4 text-left hover:bg-[#fafafa] transition-colors duration-150"
+                className="w-full flex flex-col gap-3 md:grid md:grid-cols-12 md:gap-4 md:items-center px-5 sm:px-6 py-4 text-left hover:bg-[#fafafa] transition-colors duration-150"
               >
-                <div className="col-span-1 font-mono text-sm tracking-widest text-[#9a3412]">
-                  #{entry.sequence ?? "—"}
+                {/* Mobile: Seq + Method on one row. Desktop: separate cells. */}
+                <div className="flex items-center justify-between md:block md:col-span-1 font-mono text-sm tracking-widest text-[#9a3412]">
+                  <span>#{entry.sequence ?? "—"}</span>
+                  <span className="md:hidden text-[#4b5563] text-xs uppercase">
+                    {isOpen ? "− close" : "+ open"}
+                  </span>
                 </div>
-                <div className="col-span-2 font-mono text-xs text-[#4b5563]">
+                <div className="md:col-span-2 font-mono text-xs text-[#4b5563]">
+                  <span className="md:hidden tracking-widest uppercase text-[#9ca3af] mr-2">Time</span>
                   {formatTimestamp(entry.timestamp)}
                 </div>
-                <div className="col-span-3 text-sm text-[#1a1a1a]">
+                <div className="md:col-span-3 text-sm text-[#1a1a1a]">
+                  <span className="md:hidden font-mono tracking-widest uppercase text-[10px] text-[#9ca3af] mr-2">Decision point</span>
                   {(entry.decision_point ?? "").replace(/_/g, " ")}
                 </div>
-                <div className="col-span-2">
+                <div className="md:col-span-2">
                   <span
                     className={`inline-block border px-3 py-1 font-mono text-xs tracking-widest uppercase ${decisionChipClass(entry.decision)}`}
                   >
                     {entry.decision}
                   </span>
                 </div>
-                <div className="col-span-3 flex items-center gap-3">
+                <div className="md:col-span-3 flex items-center gap-3">
+                  <span className="md:hidden font-mono tracking-widest uppercase text-[10px] text-[#9ca3af]">Conf</span>
                   <div className="flex-1 h-1 bg-[#e5e7eb]">
                     <div
                       className="h-1 bg-[#ea580c]"
@@ -301,7 +315,8 @@ export default function IDRPage() {
                     {confPct}%
                   </span>
                 </div>
-                <div className="col-span-1 text-right font-mono text-xs tracking-widest text-[#4b5563] uppercase">
+                {/* Expand glyph — desktop only; mobile shows it next to Seq. */}
+                <div className="hidden md:block md:col-span-1 text-right font-mono text-xs tracking-widest text-[#4b5563] uppercase">
                   {isOpen ? "−" : "+"}
                 </div>
               </button>
@@ -343,15 +358,16 @@ export default function IDRPage() {
                         {(entry.council_votes ?? []).map((v, i) => (
                           <div
                             key={`${v.provider}-${v.model}-${i}`}
-                            className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-[#e5e7eb] last:border-b-0 text-sm"
+                            className="flex flex-col gap-1.5 md:grid md:grid-cols-12 md:gap-4 md:items-center px-4 py-3 border-b border-[#e5e7eb] last:border-b-0 text-sm"
                           >
-                            <div className="col-span-3 font-mono text-xs tracking-widest uppercase text-[#4b5563]">
+                            <div className="flex items-center gap-2 md:block md:col-span-3 font-mono text-xs tracking-widest uppercase text-[#4b5563]">
+                              <span className="md:hidden text-[10px] text-[#9ca3af]">Provider</span>
                               {v.provider}
                             </div>
-                            <div className="col-span-3 font-mono text-xs text-[#4b5563]">
+                            <div className="md:col-span-3 font-mono text-xs text-[#4b5563] break-all">
                               {truncate(v.model, 28)}
                             </div>
-                            <div className="col-span-2">
+                            <div className="md:col-span-2">
                               {v.error ? (
                                 <span className="text-[#dc2626] font-mono text-xs">
                                   error
@@ -364,10 +380,11 @@ export default function IDRPage() {
                                 </span>
                               )}
                             </div>
-                            <div className="col-span-2 font-mono text-xs text-[#4b5563]">
+                            <div className="md:col-span-2 font-mono text-xs text-[#4b5563]">
+                              <span className="md:hidden text-[10px] tracking-widest uppercase text-[#9ca3af] mr-2">Conf</span>
                               {v.error ? "—" : `${Math.round(v.confidence * 100)}%`}
                             </div>
-                            <div className="col-span-2 font-mono text-xs text-[#9ca3af] text-right">
+                            <div className="md:col-span-2 font-mono text-xs text-[#9ca3af] md:text-right">
                               {Math.round(v.latency_ms)} ms
                             </div>
                             {v.reasoning && !v.error && (

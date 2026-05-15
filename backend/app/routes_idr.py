@@ -196,7 +196,11 @@ def _build_review_idr(
 
 
 @idrs.post("/{sequence}/review")
-async def review_idr(sequence: int, body: ReviewRequest) -> dict:
+async def review_idr(
+    sequence: int,
+    body: ReviewRequest,
+    current_user: User = Depends(get_current_user),
+) -> dict:
     """Record a human review of an IDR's falsification.
 
     Writes an append-only REVIEW IDR with
@@ -223,7 +227,7 @@ async def review_idr(sequence: int, body: ReviewRequest) -> dict:
     _validate_review_body(body)
     target = _load_review_target(sequence)
     review = _build_review_idr(sequence, target, body)
-    signed = _store.append(review)
+    signed = _store.append(review, user_id=current_user.id)
     return {
         "review": signed,
         "target": _enrich_with_effective_status(

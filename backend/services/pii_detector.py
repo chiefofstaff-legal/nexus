@@ -1,39 +1,63 @@
-"""
-PII detector — OSS stub. The proprietary dual-layer detector (regex +
-spaCy NER + sensitivity weighting) lives in `nexus_engine.pii`.
+"""PII detection — regex patterns + optional spaCy NER.
 
-This OSS stub uses the regex floor only. It catches the well-known
-patterns (email, phone, SSN, credit card, IBAN) but not entity-level
-detection. For full FADP-grade PII coverage, install nexus_engine.
+Extracted from LLMRouter (W3 SRP fix). Single responsibility: given a text,
+return which PII types were found and a weighted occurrence count.
 """
-
 from __future__ import annotations
 
 import re
 
-# Regex floor — well-known, public-domain patterns.
-_REGEX_PATTERNS: dict[str, re.Pattern[str]] = {
-    "email": re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"),
-    "phone": re.compile(r"\b(?:\+?\d{1,3}[\s-]?)?\(?\d{2,4}\)?[\s-]?\d{3,4}[\s-]?\d{3,4}\b"),
-    "ssn": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
-    "credit_card": re.compile(r"\b(?:\d[ -]*?){13,16}\b"),
-    "iban": re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{4,30}\b"),
-}
-
 
 class PiiDetector:
-    """Regex-only PII detector — OSS fallback for `nexus_engine.pii`."""
+    """Regex + spaCy PII detection. Returns types found and a weighted count."""
 
-    def detect(self, text: str) -> list[str]:
-        """Return a list of PII type names found in the text."""
-        if not text:
-            return []
-        found: list[str] = []
-        for name, pattern in _REGEX_PATTERNS.items():
-            if pattern.search(text):
-                found.append(name)
-        return found
+    PII_PATTERNS: dict[str, str] = {
+        "email": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+        "phone": r'\b(?:\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
+        "ssn": r'\b\d{3}-\d{2}-\d{4}\b',
+        "id_number": r'\b(?:ID|passport|license)\s*(?:no\.?|number|#)\s*:?\s*[A-Z0-9-]{5,20}\b',
+        "bank_account": r'\b(?:account|IBAN|routing)\s*(?:no\.?|number|#)\s*:?\s*[A-Z0-9-]{8,34}\b',
+        "credit_card": r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b',
+    }
 
-    def has_pii(self, text: str) -> bool:
-        """Fast yes/no check."""
-        return bool(self.detect(text))
+    def __init__(self) -> None:
+        self._nlp = None
+
+    def detect(self, text: str) -> tuple[list[str], float]:
+        """Return ``(pii_types, pii_count)`` for *text*.
+
+        ``pii_count`` is fractional — spaCy ORG and MONEY entities contribute
+        0.5 and 0.3 respectively rather than 1.0.
+        """
+        pii_types: list[str] = []
+        pii_count: float = 0.0
+
+        for pii_type, pattern in self.PII_PATTERNS.items():
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                pii_types.append(pii_type)
+                pii_count += len(matches)
+
+        self._load_spacy()
+        if self._nlp and self._nlp is not False:
+            doc = self._nlp(text[:10000])
+            seen_persons: set[str] = set()
+            for ent in doc.ents:
+                if ent.label_ == "PERSON" and ent.text not in seen_persons:
+                    seen_persons.add(ent.text)
+                    pii_types.append(f"named_persons:{len(seen_persons)}")
+                    pii_count += 1
+                elif ent.label_ == "ORG":
+                    pii_count += 0.5
+                elif ent.label_ == "MONEY":
+                    pii_count += 0.3
+
+        return pii_types, pii_count
+
+    def _load_spacy(self) -> None:
+        if self._nlp is None:
+            try:
+                import spacy
+                self._nlp = spacy.load("en_core_web_sm")
+            except (ImportError, OSError):
+                self._nlp = False

@@ -56,7 +56,13 @@ export function VoiceMicButton({
     setError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      // Negotiate MIME type: Safari/iOS only supports audio/mp4; Chrome/Firefox prefer audio/webm.
+      // Passing an unsupported type to MediaRecorder throws on iOS, and labelling the Blob with
+      // the wrong type causes the Groq backend to reject the file silently.
+      const mimeType = typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "audio/mp4";
+      const recorder = new MediaRecorder(stream, { mimeType });
       chunksRef.current = [];
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
@@ -65,7 +71,7 @@ export function VoiceMicButton({
         stream.getTracks().forEach((t) => t.stop());
         setState("processing");
         try {
-          const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+          const blob = new Blob(chunksRef.current, { type: mimeType });
           const result = await api.transcribeAudio(blob);
           const transcript = (result.transcript || "").trim();
           if (transcript) onTranscript(transcript);

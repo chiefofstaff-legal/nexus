@@ -8,12 +8,13 @@ import logging
 import sys
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -105,8 +106,12 @@ def _seed_corpus_if_empty() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    _app.state.data_dir = _DATA_DIR
-    _app.state.user_store = UserStore(_DATA_DIR)
+    # Tests pre-wire app.state before TestClient enters lifespan;
+    # only initialise production defaults when nothing was pre-wired.
+    if not hasattr(_app.state, "data_dir"):
+        _app.state.data_dir = _DATA_DIR
+    if not hasattr(_app.state, "user_store"):
+        _app.state.user_store = UserStore(_app.state.data_dir)
     _seed_corpus_if_empty()
     yield
 
@@ -180,26 +185,47 @@ app = FastAPI(
 app.add_middleware(TimingMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AuthRequiredMiddleware)
+_ALLOWED_ORIGINS = [
+    "https://free.donnaoss.com",
+    "https://donnaoss.com",
+    "https://www.donnaoss.com",
+    "https://chiefofstaff.pro",
+    "https://www.chiefofstaff.pro",
+    "https://try.grip-web.com",
+    "https://nexus.grip-web.com",
+    "http://localhost:3000",
+    "http://localhost:3100",
+    "http://localhost:3201",
+    "http://localhost:3847",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3100",
-        "http://localhost:3201",
-        "http://localhost:3000",
-        "http://localhost:3847",
-        "https://try.grip-web.com",
-        "https://free.donnaoss.com",
-        "https://donnaoss.com",
-        "https://www.donnaoss.com",
-        "https://chiefofstaff.pro",
-        "https://www.chiefofstaff.pro",
-        "https://nexus.grip-web.com",
-    ],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Cookie", "X-Requested-With"],
 )
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    request_id = str(uuid.uuid4())
+    logger.exception("unhandled-error request_id=%s path=%s", request_id, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "request_id": request_id},
+    )
 
 # Mount route groups — auth must come first so it can be whitelisted by
 # the auth-required middleware that W2 will add.

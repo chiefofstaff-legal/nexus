@@ -12,6 +12,7 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const justReset = searchParams.get("reset") === "success";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,6 +34,11 @@ function LoginForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {justReset && (
+        <p className="font-mono text-sm text-[#065f46] border-l-2 border-[#059669] bg-[#f0fdf4] p-3">
+          Password updated. Sign in with your new password.
+        </p>
+      )}
       <input
         type="email"
         value={email}
@@ -74,6 +80,15 @@ function LoginForm() {
       >
         {loading ? "Signing in…" : "Sign in"}
       </button>
+
+      <p className="font-mono text-xs tracking-wider text-center pt-1">
+        <Link
+          href="/forgot"
+          className="text-[#9ca3af] hover:text-white transition-colors duration-200"
+        >
+          Forgot password?
+        </Link>
+      </p>
 
       <p className="font-mono text-xs tracking-wider text-[#4b5563] text-center pt-2">
         Don&apos;t have an account?{" "}

@@ -21,10 +21,14 @@ def client(tmp_path, monkeypatch):
     from app.main import app
     from app.auth import get_data_dir, get_user_store
     from services.user_store import UserStore
+    from lib.rate_limit import AUTH_LIMITER
 
+    AUTH_LIMITER.reset()
     store = UserStore(tmp_path)
     app.dependency_overrides[get_user_store] = lambda: store
     app.dependency_overrides[get_data_dir] = lambda: tmp_path
+    app.state.data_dir = tmp_path
+    app.state.user_store = store
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

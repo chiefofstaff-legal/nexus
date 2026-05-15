@@ -74,10 +74,18 @@ def test_idr_recent_route_filters_by_tenant(tmp_path, monkeypatch):
     users = UserStore(tmp_path)
     app.dependency_overrides[get_user_store] = lambda: users
     app.dependency_overrides[get_data_dir] = lambda: tmp_path
+    # The FastAPI lifespan sets app.state.user_store ONCE and reuses it
+    # across every later TestClient(app) (app is a module singleton).
+    # Pin + restore app.state directly so a prior test's torn-down
+    # UserStore can't bleed in and 401 the session verify here.
+    _saved_user_store = getattr(app.state, "user_store", None)
+    _saved_data_dir = getattr(app.state, "data_dir", None)
+    app.state.user_store = users
     app.state.data_dir = tmp_path
 
     try:
         with TestClient(app) as client:
+            app.state.user_store = users
             alice = client.post("/api/auth/signup", json={"email": "alice@test.com", "password": "longenough"})
             assert alice.status_code == 200
             alice_id = alice.json()["id"]
@@ -114,3 +122,5 @@ def test_idr_recent_route_filters_by_tenant(tmp_path, monkeypatch):
             )
     finally:
         app.dependency_overrides.clear()
+        app.state.user_store = _saved_user_store
+        app.state.data_dir = _saved_data_dir

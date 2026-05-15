@@ -43,6 +43,8 @@ class DecisionPoint(str, Enum):
     SEMANTIC_LABELLING = "semantic_labelling"
     SEMANTIC_SEARCH = "semantic_search"
     REDACTION_POLICY = "redaction_policy"
+    TIME_ENTRY_PARSE = "time_entry_parse"
+    TASK_DELEGATION_PARSE = "task_delegation_parse"
     FALSIFICATION_REVIEW = "falsification_review"
 
 

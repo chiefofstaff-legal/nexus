@@ -34,7 +34,7 @@ class TestProtocolCompatibility:
     def test_audit_chain_satisfies_audit_protocol(self):
         from core.audit_chain import AuditChain
         from services.protocols import AuditProtocol
-        chain = AuditChain(log_path=Path("/tmp/nexus-test-w4-audit.jsonl"))
+        chain = AuditChain(audit_dir=Path("/tmp/nexus-test-w4-audit"))
         assert isinstance(chain, AuditProtocol)
 
     def test_mutation_object_missing_method_fails_protocol_check(self):
@@ -88,9 +88,9 @@ class TestISPNarrowInterface:
         from services.protocols import AuditProtocol
 
         class MinimalAudit:
-            def sign_and_append(self, entry):
-                pass
-            def verify(self):
+            def sign_and_append(self, entry, user_id="", payload=None):
+                return {}
+            def verify(self, user_id=""):
                 return {"valid": True, "total_entries": 0}
 
         assert isinstance(MinimalAudit(), AuditProtocol)

@@ -59,6 +59,17 @@ export async function logoutUser(): Promise<void> {
   await postJson("/api/auth/logout", {});
 }
 
+export async function requestPasswordReset(email: string): Promise<void> {
+  const res = await postJson("/api/auth/forgot", { email });
+  if (res.status !== 204) throw new AuthError(await readError(res), res.status);
+}
+
+export async function resetPassword(token: string, newPassword: string): Promise<CurrentUser> {
+  const res = await postJson("/api/auth/reset", { token, new_password: newPassword });
+  if (!res.ok) throw new AuthError(await readError(res), res.status);
+  return (await res.json()) as CurrentUser;
+}
+
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   const res = await fetch("/api/auth/me", { credentials: "include", cache: "no-store" });
   if (res.status === 401) return null;

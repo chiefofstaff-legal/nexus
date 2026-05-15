@@ -53,7 +53,11 @@ function useVoiceTranscript() {
     setVoiceError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      // Negotiate MIME type: Safari/iOS only supports audio/mp4; Chrome/Firefox prefer audio/webm.
+      const mimeType = typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "audio/mp4";
+      const recorder = new MediaRecorder(stream, { mimeType });
       chunksRef.current = [];
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
@@ -62,7 +66,7 @@ function useVoiceTranscript() {
         stream.getTracks().forEach((t) => t.stop());
         setVoiceState("processing");
         try {
-          const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+          const blob = new Blob(chunksRef.current, { type: mimeType });
           const result = await api.transcribeAudio(blob);
           setFinal(result.transcript);
         } catch (e) {

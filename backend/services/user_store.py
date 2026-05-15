@@ -71,6 +71,37 @@ class UserStore:
     def verify_password(self, user: User, password: str) -> bool:
         return bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8"))
 
+    def update_password(self, user_id: str, new_password: str) -> User | None:
+        new_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        with self._lock:
+            rows = list(self._iter())
+            updated: User | None = None
+            for entry in rows:
+                if entry["id"] == user_id:
+                    entry["password_hash"] = new_hash
+                    updated = User(**entry)
+                    break
+            if updated is None:
+                return None
+            self._rewrite(rows)
+            return updated
+
+    def _rewrite(self, rows: list[dict]) -> None:
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".users.", suffix=".jsonl", dir=self._path.parent,
+        )
+        try:
+            with os.fdopen(fd, "wb") as f:
+                for entry in rows:
+                    f.write((json.dumps(entry) + "\n").encode("utf-8"))
+            os.replace(tmp_path, self._path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
+
     def _normalise_email(self, email: str) -> str:
         candidate = (email or "").strip().lower()
         if not _EMAIL_RE.match(candidate):

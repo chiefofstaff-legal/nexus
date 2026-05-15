@@ -25,7 +25,7 @@ Usage:
         synthesis_method=SynthesisMethod.MAJORITY_VOTE,
         falsification_criterion="Human review confirms no PII or privileged content",
     )
-    signed = store.append(idr)                  # writes to disk, returns signed dict
+    signed = store.append(idr, user_id="acme-tenant")  # writes signed dict
     recent = store.list_recent(limit=20)        # list last 20 IDRs
     matches = store.find_by_input_hash(hash)    # lookup IDRs for a specific input
     result = store.verify()                     # HMAC chain integrity check
@@ -42,6 +42,21 @@ from core.idr_happi import HappiChain
 from core.intent_decision_record import IntentDecisionRecord
 
 logger = logging.getLogger(__name__)
+
+
+_IDR_SHARED_TENANT = "_idrs"
+"""IDRs go through a single shared HMAC chain regardless of tenant.
+
+The IDR substrate already tags every entry with ``metadata.tenant_id`` and
+``routes_idr.py`` filters reads by ``_belongs_to(entry, user_id)``. The
+per-user partitioning that ``AuditChain`` newly enforces is for the
+*operational* audit log (document_processed, sop_completed, time_entry,
+llm_routing, sharepoint_*). The IDR review trail is intentionally a single
+HMAC chain so cross-tenant ordering / review references stay verifiable
+end-to-end. Using a fixed tenant slot here keeps the chain physically
+inside ``data/idr/_idrs/`` and reuses the new partitioned write/read code
+path without inventing a second chain.
+"""
 
 
 def _idr_to_happi_fields(idr: IntentDecisionRecord) -> tuple[str, float, dict]:
@@ -101,13 +116,28 @@ class IDRStore:
             signing_key_path=idr_dir / "happi-signing-key",
         )
 
-    def append(self, idr: IntentDecisionRecord) -> dict:
+    def append(self, idr: IntentDecisionRecord, user_id: str) -> dict:
         """Sign the IDR and append to the chain. Returns the signed dict.
+
+        ``user_id`` is the acting tenant. It is stamped into
+        ``idr.metadata["tenant_id"]`` here — the single DRY injection
+        point — so that ``routes_idr._belongs_to`` can filter list reads
+        by tenant. Stamping at this one site (rather than at every
+        construction site: routes.py, council.py, document_processor.py,
+        sensitivity_classifier.py, the review IDR) is what guarantees
+        EVERY persisted IDR is tenant-attributed and therefore visible
+        on the /idr page. Injection is additive — any caller-supplied
+        metadata is preserved.
 
         Also mirrors to the happi/1.1 chain (non-blocking — mirror failures
         log a warning but do not affect the canonical write).
         """
-        signed = self._chain.sign_and_append(idr.model_dump(mode="json"))
+        if not user_id:
+            raise ValueError("user_id required to append an IDR")
+        idr.metadata["tenant_id"] = user_id
+        signed = self._chain.sign_and_append(
+            idr.model_dump(mode="json"), user_id=_IDR_SHARED_TENANT
+        )
         try:
             intent, confidence, metadata = _idr_to_happi_fields(idr)
             self._happi_chain.sign_and_append(intent, confidence, metadata)
@@ -115,28 +145,89 @@ class IDRStore:
             logger.warning("happi/1.1 mirror failed for idr %s: %s", idr.idr_id, exc)
         return signed
 
-    def verify_happi(self) -> dict:
+    def _verify_happi(self) -> dict:
         """Walk the happi/1.1 mirror chain and report HMAC integrity.
 
-        Surfaces the OSS-protocol-compatible chain status alongside the
-        legacy ``verify()``. Returns the same shape so callers can switch
-        when the cut-over completes.
+        Private (per ISP gate): direct callers should reach for
+        ``store._happi_chain.verify()`` if they truly need the mirror
+        chain. The public ``verify()`` is the only surfaced verification
+        path — Sprint C will cut over to happi-only and rename then.
         """
         return self._happi_chain.verify()
 
-    def _iter_entries(self) -> Iterator[dict]:
-        """Yield every parsed IDR from the log, skipping blank or malformed lines."""
-        if not self._log_path.exists():
-            return
-        with open(self._log_path, "r", encoding="utf-8") as f:
+    @staticmethod
+    def _read_records(path: Path) -> list[dict]:
+        """Parse every JSON record from a flat ``.jsonl`` file."""
+        records: list[dict] = []
+        with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    yield json.loads(line)
+                    records.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
+        return records
+
+    def _migrate_legacy_flat_log(self) -> None:
+        """One-time, concurrency- and crash-safe fold of the legacy flat
+        log into the partition.
+
+        Pre-2026-05-12 deployments wrote IDRs to ``idr/idrs.jsonl`` (flat,
+        no per-tenant partition). Post-partitioning, ``verify()`` reads
+        ``idr/_idrs/chain.jsonl`` while ``_iter_entries`` was still reading
+        the flat file and returning early — list and counter diverged
+        (the production "2 entries / empty table" contradiction).
+
+        Re-signing every legacy record into the partition preserves all
+        history with no loss: ``AuditChain`` strips only the chain-linkage
+        fields (entry_hash/chain_hash/sequence) and re-chains, so decision
+        content is byte-preserved and ``verify()`` stays valid and counts
+        them. The HMAC re-sign is acceptable — the legacy flat log was
+        never per-tenant-verifiable; forensic continuity for the
+        partition era is what matters going forward.
+
+        Safety (this runs on the read path of a public endpoint over a
+        tamper-evident compliance chain, so it must not duplicate records
+        or 500 under concurrent first-loads):
+
+        - ``rename(idrs.jsonl -> idrs.jsonl.migrating)`` is a single
+          POSIX-atomic claim. Exactly one caller wins; concurrent callers
+          get ``FileNotFoundError`` and return — no double-migration, no
+          duplicate audit records, no rename-race 500.
+        - A crash after the claim leaves no ``idrs.jsonl`` (it is now
+          ``.migrating``), so ``_iter_entries`` will not re-enter the
+          migration — no duplicates. The records are preserved on disk
+          in ``.migrating`` (recoverable), not lost.
+        - Accepted transient: a losing concurrent caller proceeds to read
+          a partition the winner may still be filling, so that single
+          in-flight request can briefly under-count during the one-time
+          sub-second migration. It self-corrects on the next read and is
+          strictly better than the prior total-empty bug.
+        """
+        migrating = self._log_path.with_suffix(".jsonl.migrating")
+        try:
+            self._log_path.rename(migrating)  # atomic single-winner claim
+        except (FileNotFoundError, OSError):
+            return  # another caller already claimed/completed the migration
+        for record in self._read_records(migrating):
+            self._chain.sign_and_append(record, user_id=_IDR_SHARED_TENANT)
+        migrating.rename(migrating.with_suffix(".migrated"))
+
+    def _iter_entries(self) -> Iterator[dict]:
+        """Yield every parsed IDR from the partitioned chain.
+
+        The partitioned ``data/idr/_idrs/chain.jsonl`` (what ``verify()``
+        reads) is the single source of truth. If a legacy flat
+        ``idr/idrs.jsonl`` still exists, it is migrated into the
+        partition once before reading. Invariant guaranteed by this
+        design: ``verify().total_entries == len(list(_iter_entries()))``
+        for the same data, because both now read the same partition.
+        """
+        if self._log_path.exists():
+            self._migrate_legacy_flat_log()
+        yield from self._chain.read_chain(_IDR_SHARED_TENANT)
 
     def list_recent(self, limit: int = 20) -> list[dict]:
         """Return the last ``limit`` IDRs in reverse chronological order."""
@@ -187,5 +278,10 @@ class IDRStore:
         return latest.get("decision", "inconclusive"), latest
 
     def verify(self) -> dict:
-        """Walk the IDR chain and report HMAC integrity."""
-        return self._chain.verify()
+        """Walk the IDR chain and report HMAC integrity.
+
+        Scoped to the shared IDR tenant slot — see ``_IDR_SHARED_TENANT``
+        for why IDRs do not use per-user audit partitioning (the IDR
+        substrate tags each entry with ``metadata.tenant_id`` instead).
+        """
+        return self._chain.verify(user_id=_IDR_SHARED_TENANT)

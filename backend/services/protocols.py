@@ -115,10 +115,17 @@ class SensitivityClassifierProtocol(Protocol):
 
 @runtime_checkable
 class AuditProtocol(Protocol):
-    """Used by: all endpoints that write audit events."""
+    """Used by: all endpoints that write audit events.
 
-    def sign_and_append(self, entry: dict) -> None:
+    Per-tenant partitioning (2026-05-12): ``sign_and_append`` REQUIRES a
+    ``user_id`` to physically isolate each tenant's chain on disk. Reads
+    via ``verify`` are scoped to that user's chain.
+    """
+
+    def sign_and_append(
+        self, entry: dict, user_id: str = "", payload: Optional[dict] = None
+    ) -> dict:
         ...
 
-    def verify(self) -> dict:
+    def verify(self, user_id: str = "") -> dict:
         ...

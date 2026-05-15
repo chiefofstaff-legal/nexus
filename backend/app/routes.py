@@ -98,13 +98,29 @@ council = get_council()
 sensitivity_classifier = get_sensitivity_classifier()
 
 
+def _safe_audit(entry: dict, user_id: str) -> None:
+    """Sign-and-append ``entry`` to ``user_id``'s chain; never crash the caller.
+
+    Single source of truth for the ``try/sign_and_append/except: pass``
+    pattern that previously sprawled across every audit-emitting helper
+    (document, time, task, AI decision, SharePoint). Audit is secondary
+    to returning the actual response — a chain failure must not break
+    the operational endpoint.
+    """
+    try:
+        audit_chain.sign_and_append(entry, user_id=user_id)
+    except Exception:
+        pass
+
+
 def _audit_document_processed(
     record: DocumentRecord,
     filename: str,
     chunk_count: int,
+    user_id: str,
     source_folder: Optional[str] = None,
 ) -> None:
-    """Sign and append a ``document_processed`` audit entry.
+    """Sign and append a ``document_processed`` audit entry to ``user_id``'s chain.
 
     Rule-of-three DRY fix: this was duplicated across the single-upload,
     batch-upload, and parallel-folder-ingest paths. One source of truth.
@@ -119,7 +135,7 @@ def _audit_document_processed(
     }
     if source_folder is not None:
         entry["source_folder"] = source_folder
-    audit_chain.sign_and_append(entry)
+    _safe_audit(entry, user_id)
 
 # In-memory document store (POC)
 _document_records: dict[str, DocumentRecord] = {}
@@ -216,7 +232,9 @@ async def upload_document(
 
         _document_records[record.id] = record
         _document_texts[record.id] = extraction.text
-        _audit_document_processed(record, file.filename, chunk_count)
+        _audit_document_processed(
+            record, file.filename, chunk_count, user_id=current_user.id,
+        )
 
         return record
     finally:
@@ -252,7 +270,9 @@ async def batch_upload(current_user: User = Depends(get_current_user)):
                 await entity_extractor.process_document(extraction.text, record.id)
                 _document_records[record.id] = record
 
-                _audit_document_processed(record, file_path.name, chunk_count)
+                _audit_document_processed(
+                    record, file_path.name, chunk_count, user_id=current_user.id,
+                )
 
                 results.append(record.model_dump())
             except Exception as e:
@@ -300,7 +320,11 @@ async def _process_single_file(
             _document_texts[record.id] = extraction.text
 
         _audit_document_processed(
-            record, file_path.name, chunk_count=record.chunk_count, source_folder=source_folder
+            record,
+            file_path.name,
+            chunk_count=record.chunk_count,
+            user_id=user_id,
+            source_folder=source_folder,
         )
         return record.model_dump(mode="json")
 
@@ -429,10 +453,14 @@ async def get_document_content(doc_id: str):
     }
 
 
-async def _redact_document(doc_id: str) -> tuple[DocumentRecord, dict]:
+async def _redact_document(
+    doc_id: str, user_id: str
+) -> tuple[DocumentRecord, dict]:
     """Run the redaction pipeline and emit a REDACTION_POLICY IDR.
 
     Shared helper for the JSON endpoint and the file download endpoint.
+    ``user_id`` is the acting tenant — threaded into the IDR append so
+    the redaction decision is tenant-attributed and visible on /idr.
     """
     record = _document_records.get(doc_id)
     text = _document_texts.get(doc_id)
@@ -472,7 +500,7 @@ async def _redact_document(doc_id: str) -> tuple[DocumentRecord, dict]:
                 "total_spans": len(result.spans),
             },
         )
-        idr_store.append(idr)
+        idr_store.append(idr, user_id=user_id)
     except Exception:
         pass  # audit chain is secondary to returning the redacted text
 
@@ -480,17 +508,23 @@ async def _redact_document(doc_id: str) -> tuple[DocumentRecord, dict]:
 
 
 @documents.post("/content/{doc_id}/redact")
-async def redact_document(doc_id: str):
+async def redact_document(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+):
     """Return the redacted text + span manifest + counts."""
-    _, payload = await _redact_document(doc_id)
+    _, payload = await _redact_document(doc_id, user_id=current_user.id)
     return payload
 
 
 @documents.get("/content/{doc_id}/download-redacted")
-async def download_redacted(doc_id: str):
+async def download_redacted(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+):
     """Return the redacted document as a plain-text download."""
     from fastapi.responses import Response
-    record, payload = await _redact_document(doc_id)
+    record, payload = await _redact_document(doc_id, user_id=current_user.id)
     safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", record.original_filename or doc_id)
     stem = Path(safe_name).stem or doc_id
     filename = f"{stem}.redacted.txt"
@@ -567,11 +601,12 @@ class RoutingResponse(BaseModel):
 
 
 
-async def _route_via_council(req: RoutingRequest) -> RoutingResponse:
+async def _route_via_council(req: RoutingRequest, user_id: str) -> RoutingResponse:
     """Classify via multi-LLM council, route on winning level, write IDR."""
     council_result = await sensitivity_classifier.classify(
         req.prompt,
         doc_summary=f"routing query ({len(req.prompt)} chars)",
+        user_id=user_id,
     )
     try:
         level = SensitivityLevel(council_result.decision)
@@ -583,6 +618,7 @@ async def _route_via_council(req: RoutingRequest) -> RoutingResponse:
         system=req.system,
         task_type=req.task_type,
         force_level=level,
+        user_id=user_id,
     )
     enrich_decision_with_council(decision, council_result)
     return RoutingResponse(
@@ -596,6 +632,7 @@ async def _route_via_council(req: RoutingRequest) -> RoutingResponse:
 async def route_query(
     req: RoutingRequest,
     router_svc: LLMRouter = Depends(get_llm_router),
+    current_user: User = Depends(get_current_user),
 ):
     """Route via council (default) or explicit ``force_model`` bypass."""
     if req.force_model:
@@ -604,13 +641,17 @@ async def route_query(
             system=req.system,
             task_type=req.task_type,
             force_model=req.force_model,
+            user_id=current_user.id,
         )
         return RoutingResponse(response=response_text, decision=decision)
-    return await _route_via_council(req)
+    return await _route_via_council(req, user_id=current_user.id)
 
 
 @routing.post("/classify-sensitivity")
-async def classify_sensitivity(body: dict):
+async def classify_sensitivity(
+    body: dict,
+    current_user: User = Depends(get_current_user),
+):
     """Classify text sensitivity via the multi-LLM council.
 
     Runs the same council that ``/api/routing/query`` uses but skips the
@@ -637,6 +678,7 @@ async def classify_sensitivity(body: dict):
     council_result = await sensitivity_classifier.classify(
         text,
         doc_summary=f"classify-only request ({len(text)} chars)",
+        user_id=current_user.id,
     )
     pii_fingerprint = council_result.idr.get("metadata", {}).get(
         "pii_fingerprint", []
@@ -760,7 +802,11 @@ async def start_sop(sop_id: str):
 
 
 @sops.post("/respond/{execution_id}")
-async def respond_to_step(execution_id: str, body: dict):
+async def respond_to_step(
+    execution_id: str,
+    body: dict,
+    current_user: User = Depends(get_current_user),
+):
     """Submit a response for the current SOP step."""
     execution = _active_executions.get(execution_id)
     if not execution:
@@ -772,12 +818,15 @@ async def respond_to_step(execution_id: str, body: dict):
 
     if execution.completed:
         output = sop_engine.generate_output(execution)
-        audit_chain.sign_and_append({
-            "event": "sop_completed",
-            "sop_id": execution.sop_id,
-            "sop_name": execution.sop_name,
-            "execution_id": execution_id,
-        })
+        _safe_audit(
+            {
+                "event": "sop_completed",
+                "sop_id": execution.sop_id,
+                "sop_name": execution.sop_name,
+                "execution_id": execution_id,
+            },
+            current_user.id,
+        )
         return {"completed": True, "output": output}
 
     if execution.halted:
@@ -845,14 +894,7 @@ def _audit_ai_decision(
     Swallows errors: audit is secondary to returning the result, but a
     failure here is logged at the call site rather than silently lost.
     """
-    try:
-        audit_chain.sign_and_append({
-            "event": event,
-            "user_id": user_id,
-            **payload,
-        })
-    except Exception:
-        pass
+    _safe_audit({"event": event, "user_id": user_id, **payload}, user_id)
 
 
 def _audit_time_entry(entry: TimeEntry, user_id: str, source: str) -> None:
@@ -871,6 +913,46 @@ def _audit_time_entry(entry: TimeEntry, user_id: str, source: str) -> None:
     )
 
 
+def _emit_decision_idr(
+    *,
+    decision_point: DecisionPoint,
+    input_text: str,
+    input_summary: str,
+    decision: str,
+    reasoning: str,
+    falsification_criterion: str,
+    metadata: dict,
+    user_id: str,
+) -> None:
+    """Append a deterministic IntentDecisionRecord for a non-council AI
+    decision (voice time-entry parse, voice delegation parse, task
+    create), stamped to ``user_id`` so it surfaces on /idr.
+
+    Single DRY construction point for the three AI-parse decision
+    surfaces that previously wrote only a generic operational audit
+    entry (or nothing) and were therefore invisible on the IDR page.
+    The operational audit entry is kept separately by the caller — this
+    ADDS an IDR, it does not replace the audit entry. Swallows errors:
+    the IDR is secondary to returning the operational result.
+    """
+    try:
+        idr = IntentDecisionRecord(
+            decision_point=decision_point,
+            input_hash=IntentDecisionRecord.hash_input(input_text),
+            input_summary=input_summary[:500],
+            decision=decision,
+            confidence=1.0,
+            confidence_rationale="deterministic: structured parse of a transcript",
+            reasoning=reasoning,
+            synthesis_method=SynthesisMethod.DETERMINISTIC,
+            falsification_criterion=falsification_criterion,
+            metadata=metadata,
+        )
+        idr_store.append(idr, user_id=user_id)
+    except Exception:
+        pass
+
+
 def _capture_and_store(
     transcript: str, rate: float, source: str, user: User
 ) -> TimeEntry:
@@ -880,7 +962,9 @@ def _capture_and_store(
     The transcript is anonymised inside ``build_entry_from_transcript``
     (PII Shield in time_capture._claude_parse), so the AI provider never
     sees real client names or matter references. The de-anonymised result
-    is stored AND audited locally.
+    is stored AND audited locally. Two records are written: the existing
+    operational audit entry (``_audit_time_entry``) AND an
+    IntentDecisionRecord (so the AI parse is visible on the /idr page).
     """
     try:
         entry = build_entry_from_transcript(
@@ -892,6 +976,34 @@ def _capture_and_store(
         raise HTTPException(status_code=400, detail=str(e)) from e
     _time_store.log_time_entry(entry, user_id=user.id)
     _audit_time_entry(entry, user.id, source)
+    _emit_decision_idr(
+        decision_point=DecisionPoint.TIME_ENTRY_PARSE,
+        input_text=transcript,
+        input_summary=(
+            f"time entry parse ({source}): {entry.duration_minutes} min "
+            f"on '{entry.matter}'"
+        ),
+        decision=f"{entry.duration_minutes}min @ CHF{entry.hourly_rate_chf}",
+        reasoning=(
+            f"transcript parsed to matter '{entry.matter}', "
+            f"{entry.duration_minutes} minutes, "
+            f"CHF {entry.value_chf} billable ({entry.description})"
+        ),
+        falsification_criterion=(
+            "A reviewer comparing the original transcript against the "
+            "parsed entry finds a different matter, duration, or rate — "
+            "i.e. the structured parse misread the dictation."
+        ),
+        metadata={
+            "entry_id": entry.id,
+            "matter": entry.matter,
+            "duration_minutes": entry.duration_minutes,
+            "hourly_rate_chf": entry.hourly_rate_chf,
+            "value_chf": entry.value_chf,
+            "source": source,
+        },
+        user_id=user.id,
+    )
     return entry
 
 
@@ -1003,10 +1115,10 @@ class StatusUpdate(BaseModel):
     status: str
 
 
-def _audit_task_event(event: str, task: Task) -> None:
-    """Append a signed audit entry. Swallows errors — audit is secondary."""
-    try:
-        audit_chain.sign_and_append({
+def _audit_task_event(event: str, task: Task, user_id: str) -> None:
+    """Append a signed audit entry to ``user_id``'s chain. Swallows errors."""
+    _safe_audit(
+        {
             "event": event,
             "task_id": task.id,
             "title": task.title,
@@ -1014,9 +1126,9 @@ def _audit_task_event(event: str, task: Task) -> None:
             "matter": task.matter,
             "priority": task.priority.value,
             "status": task.status.value,
-        })
-    except Exception:
-        pass
+        },
+        user_id,
+    )
 
 
 def _coerce_status(raw: str) -> TaskStatus:
@@ -1031,7 +1143,10 @@ def _coerce_status(raw: str) -> TaskStatus:
 
 
 @tasks.post("/delegate")
-async def delegate_task(req: DelegateRequest):
+async def delegate_task(
+    req: DelegateRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Parse a voice transcript into a preview task — does NOT persist.
 
     The caller (UI) shows the parsed preview for user review, then confirms
@@ -1039,6 +1154,11 @@ async def delegate_task(req: DelegateRequest):
     Using delegate_from_transcript() here caused a double-create: delegate
     stored + confirm stored = 2 tasks. Fixed by calling parse_delegation()
     directly, which returns a ParsedDelegation without touching the store.
+
+    The task itself stays unpersisted (preview semantics preserved), but
+    the AI delegation parse IS now recorded as an IntentDecisionRecord
+    so it is visible on the /idr page — previously this AI decision was
+    invisible because the endpoint persisted/audited nothing.
     """
     from services.task_manager import parse_delegation, _make_task_id
     from datetime import datetime as _dt
@@ -1059,11 +1179,41 @@ async def delegate_task(req: DelegateRequest):
         priority=parsed.priority,
         raw_transcript=transcript,
     )
+    _emit_decision_idr(
+        decision_point=DecisionPoint.TASK_DELEGATION_PARSE,
+        input_text=transcript,
+        input_summary=(
+            f"delegation parse: '{parsed.title}' -> {parsed.assignee}"
+        ),
+        decision=f"delegate to {parsed.assignee}",
+        reasoning=(
+            f"transcript parsed to task '{parsed.title}' for "
+            f"{parsed.assignee} on matter '{parsed.matter}' "
+            f"(priority {parsed.priority.value})"
+        ),
+        falsification_criterion=(
+            "A reviewer comparing the dictation against the parsed "
+            "delegation finds a different assignee, matter, title, or "
+            "priority — i.e. the parse misread who-does-what."
+        ),
+        metadata={
+            "task_id": preview.id,
+            "title": parsed.title,
+            "assignee": parsed.assignee,
+            "matter": parsed.matter,
+            "priority": parsed.priority.value,
+            "persisted": False,
+        },
+        user_id=current_user.id,
+    )
     return preview.model_dump(mode="json")
 
 
 @tasks.post("/create")
-async def create_task(req: TaskCreateRequest):
+async def create_task(
+    req: TaskCreateRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Direct structured create (used by the Edit flow in the UI)."""
     from datetime import datetime as _dt, date as _date
     from services.task_manager import Priority, _make_task_id
@@ -1096,7 +1246,34 @@ async def create_task(req: TaskCreateRequest):
         raw_transcript=req.raw_transcript,
     )
     _task_store.add(task)
-    _audit_task_event("task_created", task)
+    _audit_task_event("task_created", task, user_id=current_user.id)
+    _emit_decision_idr(
+        decision_point=DecisionPoint.TASK_DELEGATION_PARSE,
+        input_text=req.raw_transcript or req.title,
+        input_summary=(
+            f"task created: '{task.title}' -> {task.assignee}"
+        ),
+        decision=f"delegate to {task.assignee}",
+        reasoning=(
+            f"structured create of task '{task.title}' for "
+            f"{task.assignee} on matter '{task.matter}' "
+            f"(priority {task.priority.value})"
+        ),
+        falsification_criterion=(
+            "A reviewer finds the created task's assignee, matter, or "
+            "priority inconsistent with what the user intended in the "
+            "edit form or the originating dictation."
+        ),
+        metadata={
+            "task_id": task.id,
+            "title": task.title,
+            "assignee": task.assignee,
+            "matter": task.matter,
+            "priority": task.priority.value,
+            "persisted": True,
+        },
+        user_id=current_user.id,
+    )
     return task.model_dump(mode="json")
 
 
@@ -1113,14 +1290,18 @@ async def list_tasks(
 
 
 @tasks.patch("/{task_id}/status")
-async def update_task_status(task_id: str, body: StatusUpdate):
+async def update_task_status(
+    task_id: str,
+    body: StatusUpdate,
+    current_user: User = Depends(get_current_user),
+):
     """Move a task between columns on the board."""
     status = _coerce_status(body.status)
     try:
         task = _task_store.update_status(task_id, status)
     except KeyError as e:
         raise HTTPException(status_code=404, detail="task not found") from e
-    _audit_task_event("task_status_changed", task)
+    _audit_task_event("task_status_changed", task, user_id=current_user.id)
     return task.model_dump(mode="json")
 
 
@@ -1305,12 +1486,9 @@ def _sp_config(body: _SharePointCredentials) -> SharePointConfig:
     )
 
 
-def _audit_sharepoint(event: str, payload: dict) -> None:
-    """Sign-and-append — SharePoint events join the main audit chain."""
-    try:
-        audit_chain.sign_and_append({"event": event, **payload})
-    except Exception:
-        pass
+def _audit_sharepoint(event: str, payload: dict, user_id: str) -> None:
+    """Sign-and-append — SharePoint events join ``user_id``'s audit chain."""
+    _safe_audit({"event": event, **payload}, user_id)
 
 
 @sharepoint.get("/status")
@@ -1324,13 +1502,13 @@ async def sharepoint_status():
 
 
 @sharepoint.post("/connect")
-async def sharepoint_connect(body: SharePointConnectRequest):
+async def sharepoint_connect(
+    body: SharePointConnectRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Test connection. Stub mode always succeeds with mock payload."""
     result = await _sharepoint.test_connection(_sp_config(body))
-    _audit_sharepoint("sharepoint_connect", {
-        "site_url": result.get("site_url", ""),
-        "stub_mode": result.get("stub_mode", True),
-    })
+    _audit_sharepoint("sharepoint_connect", {"site_url": result.get("site_url", ""), "stub_mode": result.get("stub_mode", True)}, current_user.id)
     return result
 
 
@@ -1358,16 +1536,17 @@ class SharePointSyncRequest(_SharePointCredentials):
 
 
 @sharepoint.post("/sync")
-async def sharepoint_sync(body: SharePointSyncRequest):
+async def sharepoint_sync(
+    body: SharePointSyncRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Sync a single SharePoint document into NEXUS (stub flags it synced)."""
     if not body.doc_id:
         raise HTTPException(status_code=400, detail="doc_id required")
     result = await _sharepoint.sync_document(_sp_config(body), body.doc_id)
     if not result.get("synced"):
         raise HTTPException(status_code=404, detail=result.get("reason", "sync failed"))
-    _audit_sharepoint("sharepoint_synced", {
-        "doc_id": body.doc_id, "title": result.get("title", ""),
-    })
+    _audit_sharepoint("sharepoint_synced", {"doc_id": body.doc_id, "title": result.get("title", "")}, current_user.id)
     return result
 
 
@@ -1378,18 +1557,17 @@ class SharePointExportRequest(_SharePointCredentials):
 
 
 @sharepoint.post("/export")
-async def sharepoint_export(body: SharePointExportRequest):
+async def sharepoint_export(
+    body: SharePointExportRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Upload a generated draft back into SharePoint Online."""
     if not body.content.strip() or not body.filename.strip():
         raise HTTPException(status_code=400, detail="content and filename required")
     result = await _sharepoint.export_document(
         _sp_config(body), body.content, body.filename.strip(), body.folder or "NEXUS Drafts"
     )
-    _audit_sharepoint("sharepoint_exported", {
-        "filename": body.filename,
-        "folder": body.folder,
-        "web_url": result.get("web_url", ""),
-    })
+    _audit_sharepoint("sharepoint_exported", {"filename": body.filename, "folder": body.folder, "web_url": result.get("web_url", "")}, current_user.id)
     return result
 
 
